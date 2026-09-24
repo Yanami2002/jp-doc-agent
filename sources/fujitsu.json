@@ -1,0 +1,32 @@
+[
+  {
+    "title": "2024年度第2四半期決算概要.pdf",
+    "url": "https://raw.githubusercontent.com/FujitsuResearch/Fujitsu-RAG-Hard-Benchmark/39fc62415ae5557f51d61ae64faf05494703afe5/dataset/PDFs/2024%E5%B9%B4%E5%BA%A6%E7%AC%AC2%E5%9B%9B%E5%8D%8A%E6%9C%9F%E6%B1%BA%E7%AE%97%E6%A6%82%E8%A6%81.pdf",
+    "dataset": "fujitsu-rag-hard",
+    "sha256": "8b2b3046b8081e1810fda6c86be27a5c802def782e64678047a0ea55ad70e17a"
+  },
+  {
+    "title": "Fujitsu-Databook-FY2020-Organization.pdf",
+    "url": "https://raw.githubusercontent.com/FujitsuResearch/Fujitsu-RAG-Hard-Benchmark/39fc62415ae5557f51d61ae64faf05494703afe5/dataset/PDFs/Fujitsu-Databook-FY2020-Organization.pdf",
+    "dataset": "fujitsu-rag-hard",
+    "sha256": "2995aaa2bb1e22298fc329fad1d4376448b689f2b85a1fe6495978a1181455ed"
+  },
+  {
+    "title": "Fujitsu-IFRS-FY2024-3Q.pdf",
+    "url": "https://raw.githubusercontent.com/FujitsuResearch/Fujitsu-RAG-Hard-Benchmark/39fc62415ae5557f51d61ae64faf05494703afe5/dataset/PDFs/Fujitsu-IFRS-FY2024-3Q.pdf",
+    "dataset": "fujitsu-rag-hard",
+    "sha256": "eb8bc065a9cd758ca12a7084d446508ae27a5eaa93f6a954db8189a127b3f67a"
+  },
+  {
+    "title": "Fujitsu-ShareholdersMTG-FY2023.pdf",
+    "url": "https://raw.githubusercontent.com/FujitsuResearch/Fujitsu-RAG-Hard-Benchmark/39fc62415ae5557f51d61ae64faf05494703afe5/dataset/PDFs/Fujitsu-ShareholdersMTG-FY2023.pdf",
+    "dataset": "fujitsu-rag-hard",
+    "sha256": "23695bb34953a27db042eed751b80211962db5269232775ce8b67f7dfa019a07"
+  },
+  {
+    "title": "富士通統合レポート2024.pdf",
+    "url": "https://raw.githubusercontent.com/FujitsuResearch/Fujitsu-RAG-Hard-Benchmark/39fc62415ae5557f51d61ae64faf05494703afe5/dataset/PDFs/%E5%AF%8C%E5%A3%AB%E9%80%9A%E7%B5%B1%E5%90%88%E3%83%AC%E3%83%9D%E3%83%BC%E3%83%882024.pdf",
+    "dataset": "fujitsu-rag-hard",
+    "sha256": "9274456a44d506682e1cff97d64ba680bdcd8ec074d0ceb0e6115357c9f77536"
+  }
+]
