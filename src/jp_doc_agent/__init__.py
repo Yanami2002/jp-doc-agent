@@ -1,0 +1,1 @@
+"""Japanese document research agent."""
