@@ -104,7 +104,7 @@ def test_encrypted_pdf_open_password(tmp_path, pdf_bytes, password):
     writer.write(buffer)
     pdf = save_pdf(buffer.getvalue(), tmp_path, "https://example.com/encrypted.pdf")
     if password:
-        with pytest.raises(ValueError, match="打开密码"):
+        with pytest.raises(ValueError, match="パスワード"):
             extract_pages(pdf.path)
     else:
         assert extract_pages(pdf.path) == ["Readable"]
@@ -125,7 +125,7 @@ def test_download_size_limit(tmp_path, monkeypatch):
     with httpx.Client(
         transport=httpx.MockTransport(lambda _: httpx.Response(200, content=b"%PDF-" + b"x" * 20))
     ) as client:
-        with pytest.raises(ValueError, match="限制"):
+        with pytest.raises(ValueError, match="上限"):
             download_pdf(client, "https://example.com/doc.pdf", tmp_path)
     assert list(tmp_path.iterdir()) == []
 

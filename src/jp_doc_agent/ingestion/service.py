@@ -83,6 +83,8 @@ def import_pdf(engine: Engine, pdf: PdfFile, *, title: str, source_url: str, dat
                     parser_version=PARSER_VERSION,
                     page_count=len(pages),
                     file_path=str(pdf.path.resolve()),
+                    chunking_signature=None,
+                    chunking_config=None,
                 )
             )
             status = "updated"
@@ -113,7 +115,10 @@ def import_manifest(engine: Engine, manifest: Path, data_dir: Path) -> list[dict
             try:
                 pdf = download_pdf(client, str(source.url), data_dir / "pdfs")
                 if source.sha256 and source.sha256 != pdf.sha256:
-                    raise ValueError("PDF 与来源清单的 SHA-256 不符，请核对原站是否更新。")
+                    raise ValueError(
+                        "PDF の SHA-256 が取得元一覧と一致しません。"
+                        "配布元で更新されていないか確認してください。"
+                    )
                 result.update(
                     import_pdf(
                         engine,
@@ -155,7 +160,9 @@ def read_page(engine: Engine, document_id: int, page_number: int) -> dict:
             .one_or_none()
         )
     if row is None:
-        raise ValueError("文档或页码不存在，请先使用 documents 查看已导入的文档。")
+        raise ValueError(
+            "文書またはページが見つかりません。documents コマンドで登録済み文書を確認してください。"
+        )
     return {
         "document_id": document_id,
         **dict(row),

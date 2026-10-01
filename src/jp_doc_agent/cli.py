@@ -12,6 +12,7 @@ from pypdf.errors import PyPdfError
 from sqlalchemy.exc import SQLAlchemyError
 
 from jp_doc_agent.benchmark import fetch_benchmark
+from jp_doc_agent.chunking import ChunkingConfig, chunk_documents, list_chunks
 from jp_doc_agent.config import Settings
 from jp_doc_agent.database import check_database, create_database_engine
 from jp_doc_agent.ingestion.download import copy_local_pdf
@@ -19,28 +20,45 @@ from jp_doc_agent.ingestion.service import import_manifest, import_pdf, list_doc
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="JP Doc Agent 开发工具")
+    parser = argparse.ArgumentParser(description="JP Doc Agent 開発用 CLI")
     commands = parser.add_subparsers(dest="command", required=True)
-    commands.add_parser("check-db", help="检查 PostgreSQL 和 pgvector")
-    commands.add_parser("documents", help="列出已导入文档")
+    commands.add_parser("check-db", help="PostgreSQL と pgvector の接続を確認")
+    commands.add_parser("documents", help="登録済み文書の一覧を表示")
 
-    batch = commands.add_parser("import-documents", help="按来源清单下载并导入 PDF")
+    batch = commands.add_parser(
+        "import-documents", help="取得元一覧に従って PDF をダウンロード・登録"
+    )
     batch.add_argument("--manifest", type=Path, default=Path("sources/fujitsu.json"))
     batch.add_argument("--data-dir", type=Path, default=Path("data"))
 
-    benchmark = commands.add_parser("fetch-benchmark", help="下载原始评测标注及使用条款")
+    benchmark = commands.add_parser("fetch-benchmark", help="評価用の正解データと利用規約を取得")
     benchmark.add_argument("--data-dir", type=Path, default=Path("data"))
 
-    local = commands.add_parser("import-pdf", help="导入本地 PDF")
+    local = commands.add_parser("import-pdf", help="ローカル PDF を登録")
     local.add_argument("path", type=Path)
     local.add_argument("--title")
-    local.add_argument("--source-url", help="原始来源链接；省略时记录本地文件地址")
+    local.add_argument("--source-url", help="取得元 URL（省略時はローカルファイルの URI）")
     local.add_argument("--dataset", default="local")
     local.add_argument("--data-dir", type=Path, default=Path("data"))
 
-    page = commands.add_parser("page", help="读取某份文档的指定页面")
+    page = commands.add_parser("page", help="文書の指定ページを表示")
     page.add_argument("document_id", type=int)
-    page.add_argument("page_number", type=int, help="从 1 开始的 PDF 物理页码")
+    page.add_argument("page_number", type=int, help="1 始まりの PDF 物理ページ番号")
+
+    chunking = commands.add_parser(
+        "chunk-documents", help="登録済みの本文をページごとに分割して保存"
+    )
+    chunking.add_argument("--document-id", type=int, help="対象文書 ID（省略時は全件）")
+    chunking.add_argument("--chunk-size", type=int, default=800, help="最大文字数（既定値: 800）")
+    chunking.add_argument(
+        "--chunk-overlap", type=int, default=100, help="重複文字数の目安（既定値: 100）"
+    )
+
+    chunks = commands.add_parser("chunks", help="文書のチャンク・ページ番号・原文位置を確認")
+    chunks.add_argument("document_id", type=int)
+    chunks.add_argument("--page", type=int, dest="page_number", help="物理ページ番号で絞り込み")
+    chunks.add_argument("--limit", type=int, default=20, help="取得件数（1〜100、既定値: 20）")
+    chunks.add_argument("--offset", type=int, default=0, help="先頭からスキップする件数")
     return parser
 
 
@@ -59,7 +77,10 @@ def main() -> int:
     try:
         settings = Settings()
     except ValidationError:
-        print("配置无效：请在项目目录检查 .env 中的数据库参数。", file=sys.stderr)
+        print(
+            "設定が不正です。プロジェクト直下の .env のデータベース設定を確認してください。",
+            file=sys.stderr,
+        )
         return 1
 
     engine = create_database_engine(settings)
@@ -80,7 +101,7 @@ def main() -> int:
             return 1 if counts["failed"] else 0
         elif args.command == "import-pdf":
             if not 1 <= len(args.dataset) <= 100:
-                raise ValueError("dataset 长度必须为 1～100。")
+                raise ValueError("dataset は 1〜100 文字で指定してください。")
             pdf = copy_local_pdf(args.path, args.data_dir / "pdfs")
             result = import_pdf(
                 engine,
@@ -91,11 +112,33 @@ def main() -> int:
             )
         elif args.command == "documents":
             result = list_documents(engine)
+        elif args.command == "chunk-documents":
+            results = chunk_documents(
+                engine,
+                ChunkingConfig(args.chunk_size, args.chunk_overlap),
+                document_id=args.document_id,
+            )
+            result = {
+                "documents": len(results),
+                "chunked": sum(item["status"] == "chunked" for item in results),
+                "duplicate": sum(item["status"] == "duplicate" for item in results),
+                "chunks": sum(item["chunks"] for item in results),
+                "results": results,
+            }
+        elif args.command == "chunks":
+            result = list_chunks(
+                engine,
+                args.document_id,
+                page_number=args.page_number,
+                limit=args.limit,
+                offset=args.offset,
+            )
         else:
             result = read_page(engine, args.document_id, args.page_number)
     except SQLAlchemyError:
         print(
-            "数据库操作失败：请检查连接配置，并确认已执行 uv run alembic upgrade head。",
+            "データベース操作に失敗しました。接続設定と "
+            "uv run alembic upgrade head の実行状況を確認してください。",
             file=sys.stderr,
         )
         return 1

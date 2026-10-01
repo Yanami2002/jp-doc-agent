@@ -22,9 +22,9 @@ class PdfFile:
 def save_pdf(content: bytes, directory: Path, resolved_url: str) -> PdfFile:
     """Only complete PDF bytes are published under their SHA-256 filename."""
     if not content.startswith(b"%PDF-"):
-        raise ValueError("文件不是 PDF，可能下载到了 HTML 错误页面。")
+        raise ValueError("PDF 形式ではありません。HTML のエラーページを取得した可能性があります。")
     if len(content) > MAX_BYTES:
-        raise ValueError("PDF 超过 50 MiB 限制。")
+        raise ValueError("PDF がサイズ上限（50 MiB）を超えています。")
     digest = hashlib.sha256(content).hexdigest()
     directory.mkdir(parents=True, exist_ok=True)
     target = directory / f"{digest}.pdf"
@@ -42,14 +42,14 @@ def save_pdf(content: bytes, directory: Path, resolved_url: str) -> PdfFile:
 
 def download_pdf(client: httpx.Client, url: str, directory: Path) -> PdfFile:
     if httpx.URL(url).scheme not in {"http", "https"}:
-        raise ValueError("下载地址必须使用 http 或 https。")
+        raise ValueError("取得元 URL は http または https で指定してください。")
     content = bytearray()
     with client.stream("GET", url, follow_redirects=True) as response:
         response.raise_for_status()
         for chunk in response.iter_bytes(chunk_size=65536):
             content.extend(chunk)
             if len(content) > MAX_BYTES:
-                raise ValueError("PDF 超过 50 MiB 限制。")
+                raise ValueError("PDF がサイズ上限（50 MiB）を超えています。")
         return save_pdf(bytes(content), directory, str(response.url))
 
 

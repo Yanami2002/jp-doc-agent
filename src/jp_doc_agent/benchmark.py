@@ -27,6 +27,6 @@ def fetch_benchmark(data_dir: Path) -> dict:
             response = client.get(BASE_URL + source)
             response.raise_for_status()
             if hashlib.sha256(response.content).hexdigest() != expected_hash:
-                raise ValueError(f"评测文件哈希不符：{source}")
+                raise ValueError(f"評価ファイルのハッシュが一致しません: {source}")
             target.write_bytes(response.content)
     return {"status": "ok", "revision": REVISION, "directory": str(destination)}

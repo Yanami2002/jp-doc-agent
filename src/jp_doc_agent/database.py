@@ -21,13 +21,15 @@ def check_database(engine: Engine) -> dict[str, str | float]:
             text("SELECT extversion FROM pg_extension WHERE extname = 'vector'")
         ).scalar_one_or_none()
         if vector_version is None:
-            raise RuntimeError("当前数据库尚未启用 vector 扩展，请执行 docker/init.sql。")
+            raise RuntimeError(
+                "vector 拡張が有効ではありません。docker/init.sql を実行してください。"
+            )
 
         distance = connection.execute(
             text("SELECT '[1,2,3]'::vector <-> '[1,2,4]'::vector")
         ).scalar_one()
         if distance != 1.0:
-            raise RuntimeError("向量距离计算结果异常。")
+            raise RuntimeError("ベクトル距離の計算結果が想定と異なります。")
 
     return {
         "postgresql": postgres_version,

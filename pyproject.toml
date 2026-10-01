@@ -1,12 +1,13 @@
 [project]
 name = "jp-doc-agent"
 version = "0.1.0"
-description = "A Japanese document research agent built on public datasets."
+description = "公開データセットを用いた日本語ドキュメント調査エージェント。"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "alembic>=1.16,<2",
     "httpx>=0.28,<1",
+    "langchain-text-splitters>=1.1,<2",
     "pdfminer-six>=20251230",
     "psycopg[binary]>=3.2,<4",
     "pydantic-settings>=2,<3",
