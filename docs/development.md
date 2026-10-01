@@ -41,7 +41,7 @@ uv run jp-doc-agent --help
 uv run jp-doc-agent import-documents
 uv run jp-doc-agent fetch-benchmark
 
-# チャンクを生成して文書一覧を確認
+# 最大 300 Token・重複最大 30 Token でチャンクを生成して文書一覧を確認
 uv run jp-doc-agent chunk-documents
 uv run jp-doc-agent documents
 
@@ -75,7 +75,12 @@ jp-doc-agent/
 ├── migrations/               # 文書・ページ・チャンクのスキーマ変更
 ├── sources/                  # 公開 PDF の取得元とハッシュ
 ├── docker/init.sql           # pgvector の有効化
-├── tests/                    # 単体テストと隔離した DB 統合テスト
+├── tests/
+│   ├── conftest.py           # 一時 DB schema と PDF fixture
+│   ├── test_ingestion.py    # PDF 取り込みの検証
+│   ├── test_chunking.py     # DB を使わない分割・原文位置の検証
+│   ├── test_chunk_service.py # 保存・参照・再生成・CLI の検証
+│   └── test_chunk_migrations.py # 旧スキーマからの移行と復元
 ├── docs/
 │   ├── development.md        # 本ガイド
 │   ├── document-import.md    # PDF 取り込み
@@ -86,7 +91,9 @@ jp-doc-agent/
     ├── cli.py                # CLI の引数と出力
     ├── models.py             # データモデルと DB 制約
     ├── benchmark.py          # 正解データを本文とは別に取得
-    ├── chunking.py           # 原文位置を検証してチャンクを保存
+    ├── chunking/
+    │   ├── splitter.py       # Token 計数、本文分割、ページへの対応付け
+    │   └── service.py        # チャンクの保存、再生成、出典付き参照
     └── ingestion/
         ├── download.py       # ダウンロード、形式・サイズ・ハッシュの確認
         ├── pdf.py            # ページ単位の日本語本文抽出
@@ -94,6 +101,8 @@ jp-doc-agent/
 ```
 
 `.env`、`.venv/`、`data/`、キャッシュは Git の管理対象外です。FastAPI と LangGraph は対応機能の実装時に追加します。
+
+機能ごとの処理は `ingestion/` と `chunking/` に置き、設定・接続・モデル・CLI は共通部分としてパッケージ直下に置きます。`chunking/splitter.py` は DB 接続や PDF の取得に依存せず、`chunking/service.py` がトランザクションと永続化を担当します。`migrations/versions/` は適用済み環境を更新するための履歴なので、古いファイルも保持します。
 
 ## データベースの注意点
 

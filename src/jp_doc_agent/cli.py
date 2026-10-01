@@ -12,7 +12,8 @@ from pypdf.errors import PyPdfError
 from sqlalchemy.exc import SQLAlchemyError
 
 from jp_doc_agent.benchmark import fetch_benchmark
-from jp_doc_agent.chunking import ChunkingConfig, chunk_documents, list_chunks
+from jp_doc_agent.chunking.service import chunk_documents, list_chunks
+from jp_doc_agent.chunking.splitter import ChunkingConfig
 from jp_doc_agent.config import Settings
 from jp_doc_agent.database import check_database, create_database_engine
 from jp_doc_agent.ingestion.download import copy_local_pdf
@@ -46,12 +47,18 @@ def build_parser() -> argparse.ArgumentParser:
     page.add_argument("page_number", type=int, help="1 始まりの PDF 物理ページ番号")
 
     chunking = commands.add_parser(
-        "chunk-documents", help="登録済みの本文をページごとに分割して保存"
+        "chunk-documents", help="登録済みの全文を分割し、ページをまたぐ出典も保存"
     )
     chunking.add_argument("--document-id", type=int, help="対象文書 ID（省略時は全件）")
-    chunking.add_argument("--chunk-size", type=int, default=800, help="最大文字数（既定値: 800）")
+    defaults = ChunkingConfig()
     chunking.add_argument(
-        "--chunk-overlap", type=int, default=100, help="重複文字数の目安（既定値: 100）"
+        "--chunk-size", type=int, default=defaults.chunk_size, help="最大 Token 数（既定値: 300）"
+    )
+    chunking.add_argument(
+        "--chunk-overlap",
+        type=int,
+        default=defaults.chunk_overlap,
+        help="重複 Token 数（既定値: 30）",
     )
 
     chunks = commands.add_parser("chunks", help="文書のチャンク・ページ番号・原文位置を確認")

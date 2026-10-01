@@ -55,21 +55,49 @@ class DocumentPage(Base):
 class DocumentChunk(Base):
     __tablename__ = "document_chunks"
     __table_args__ = (
-        ForeignKeyConstraint(
-            ["document_id", "page_number"],
-            ["document_pages.document_id", "document_pages.page_number"],
-            ondelete="CASCADE",
-        ),
-        UniqueConstraint("document_id", "page_number", "chunk_index", name="unique_page_chunk"),
+        UniqueConstraint("document_id", "chunk_index", name="unique_document_chunk"),
+        UniqueConstraint("id", "document_id", name="unique_chunk_document"),
         CheckConstraint("chunk_index >= 0", name="nonnegative_chunk_index"),
         CheckConstraint("start_char >= 0 AND end_char > start_char", name="valid_chunk_range"),
         CheckConstraint("char_length(text) = end_char - start_char", name="chunk_text_length"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    document_id: Mapped[int]
-    page_number: Mapped[int]
+    document_id: Mapped[int] = mapped_column(ForeignKey("documents.id", ondelete="CASCADE"))
     chunk_index: Mapped[int]
     text: Mapped[str] = mapped_column(Text)
     start_char: Mapped[int]
     end_char: Mapped[int]
+
+
+class ChunkSource(Base):
+    __tablename__ = "chunk_sources"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["chunk_id", "document_id"],
+            ["document_chunks.id", "document_chunks.document_id"],
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["document_id", "page_number"],
+            ["document_pages.document_id", "document_pages.page_number"],
+            ondelete="CASCADE",
+        ),
+        CheckConstraint("start_char >= 0 AND end_char > start_char", name="valid_source_range"),
+        CheckConstraint(
+            "chunk_start_char >= 0 AND chunk_end_char > chunk_start_char",
+            name="valid_source_chunk_range",
+        ),
+        CheckConstraint(
+            "end_char - start_char = chunk_end_char - chunk_start_char",
+            name="source_range_length",
+        ),
+    )
+
+    chunk_id: Mapped[int] = mapped_column(primary_key=True)
+    document_id: Mapped[int]
+    page_number: Mapped[int] = mapped_column(primary_key=True)
+    start_char: Mapped[int]
+    end_char: Mapped[int]
+    chunk_start_char: Mapped[int]
+    chunk_end_char: Mapped[int]

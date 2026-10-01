@@ -1,92 +1,18 @@
-"""Page-local Japanese chunks with verified offsets and transactional rebuilds."""
+"""文書単位でのチャンク再生成と出典付きの参照。"""
 
 import hashlib
 import json
-from dataclasses import dataclass
-from importlib.metadata import version
+from dataclasses import asdict
 
-from langchain_text_splitters import RecursiveCharacterTextSplitter
 from sqlalchemy import Engine, delete, func, insert, select, update
 
+from jp_doc_agent.chunking.splitter import ChunkingConfig, count_tokens, split_document
 from jp_doc_agent.ingestion.pdf import has_unmapped_characters
-from jp_doc_agent.models import Document, DocumentChunk, DocumentPage
-
-SEPARATORS = ("\n\n", "。", "！", "？", "\n", "、", " ", "")
-
-
-@dataclass(frozen=True)
-class ChunkingConfig:
-    chunk_size: int = 800
-    chunk_overlap: int = 100
-
-    def __post_init__(self):
-        if self.chunk_size <= 0:
-            raise ValueError("チャンクサイズは 1 以上にしてください。")
-        if not 0 <= self.chunk_overlap < self.chunk_size:
-            raise ValueError("重複文字数は 0 以上、チャンクサイズ未満にしてください。")
-
-    def metadata(self) -> dict:
-        return {
-            "algorithm": "RecursiveCharacterTextSplitter",
-            "policy_version": "page-v1",
-            "library_version": version("langchain-text-splitters"),
-            "chunk_size": self.chunk_size,
-            "chunk_overlap": self.chunk_overlap,
-            "length_unit": "python_characters",
-            "separators": list(SEPARATORS),
-            "keep_separator": "end",
-            "strip_whitespace": False,
-        }
-
-
-@dataclass(frozen=True)
-class TextChunk:
-    text: str
-    start_char: int
-    end_char: int
-
-
-def split_page(text: str, config: ChunkingConfig) -> list[TextChunk]:
-    """Preserve the stored page verbatim; offsets use Python's Unicode character indices."""
-    if not text.strip():
-        return []
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=config.chunk_size,
-        chunk_overlap=config.chunk_overlap,
-        length_function=len,
-        separators=list(SEPARATORS),
-        keep_separator="end",
-        add_start_index=True,
-        strip_whitespace=False,
-    )
-    chunks = []
-    covered_until = 0
-    previous_start = -1
-    for document in splitter.create_documents([text]):
-        content = document.page_content
-        if not content.strip():
-            continue
-        start = document.metadata["start_index"]
-        end = start + len(content)
-        if (
-            start < 0
-            or start <= previous_start
-            or end <= covered_until
-            or len(content) > config.chunk_size
-            or text[start:end] != content
-            or text[covered_until:start].strip()
-        ):
-            raise ValueError("チャンクの原文位置または文字数が不正です。保存を中止しました。")
-        chunks.append(TextChunk(content, start, end))
-        covered_until = end
-        previous_start = start
-    if text[covered_until:].strip():
-        raise ValueError("分割後に未収録の本文が残っています。保存を中止しました。")
-    return chunks
+from jp_doc_agent.models import ChunkSource, Document, DocumentChunk, DocumentPage
 
 
 def chunk_document(engine: Engine, document_id: int, config: ChunkingConfig) -> dict:
-    """Serialize against import/reparse and commit all chunks of a document together."""
+    """取り込み・再解析と更新を直列化し、文書の全チャンクを一括保存する。"""
     with engine.begin() as connection:
         document = (
             connection.execute(select(Document).where(Document.id == document_id).with_for_update())
@@ -118,22 +44,29 @@ def chunk_document(engine: Engine, document_id: int, config: ChunkingConfig) -> 
             )
             return {"status": "duplicate", "document_id": document_id, "chunks": count}
 
-        rows = []
-        for page in pages:
-            for index, chunk in enumerate(split_page(page.text, config)):
-                rows.append(
-                    {
-                        "document_id": document_id,
-                        "page_number": page.page_number,
-                        "chunk_index": index,
-                        "text": chunk.text,
-                        "start_char": chunk.start_char,
-                        "end_char": chunk.end_char,
-                    }
-                )
+        chunks = split_document([page.text for page in pages], config)
+        rows = [
+            {
+                "document_id": document_id,
+                "chunk_index": index,
+                "text": chunk.text,
+                "start_char": chunk.start_char,
+                "end_char": chunk.end_char,
+            }
+            for index, chunk in enumerate(chunks)
+        ]
         connection.execute(delete(DocumentChunk).where(DocumentChunk.document_id == document_id))
         if rows:
-            connection.execute(insert(DocumentChunk), rows)
+            chunk_ids = connection.scalars(
+                insert(DocumentChunk).returning(DocumentChunk.id, sort_by_parameter_order=True),
+                rows,
+            ).all()
+            source_rows = [
+                {"chunk_id": chunk_id, "document_id": document_id, **asdict(source)}
+                for chunk_id, chunk in zip(chunk_ids, chunks, strict=True)
+                for source in chunk.sources
+            ]
+            connection.execute(insert(ChunkSource), source_rows)
         connection.execute(
             update(Document)
             .where(Document.id == document_id)
@@ -163,7 +96,7 @@ def list_chunks(
     if not 1 <= limit <= 100 or offset < 0:
         raise ValueError("limit は 1〜100、offset は 0 以上にしてください。")
     with engine.connect() as connection:
-        # Keep metadata, counts, and chunk rows consistent with concurrent rebuilds.
+        # 並行再生成中もメタデータ・件数・本文を同じ状態で参照する。
         document = (
             connection.execute(
                 select(Document.title, Document.source_url, Document.chunking_config)
@@ -188,19 +121,54 @@ def list_chunks(
             raise ValueError("指定されたページが見つかりません。")
         conditions = [DocumentChunk.document_id == document_id]
         if page_number is not None:
-            conditions.append(DocumentChunk.page_number == page_number)
+            conditions.append(
+                DocumentChunk.id.in_(
+                    select(ChunkSource.chunk_id).where(
+                        ChunkSource.document_id == document_id,
+                        ChunkSource.page_number == page_number,
+                    )
+                )
+            )
         count = connection.scalar(
             select(func.count()).select_from(DocumentChunk).where(*conditions)
         )
-        rows = connection.execute(
-            select(DocumentChunk)
-            .where(*conditions)
-            .order_by(DocumentChunk.page_number, DocumentChunk.chunk_index)
-            .limit(limit)
-            .offset(offset)
-        ).mappings()
+        rows = (
+            connection.execute(
+                select(DocumentChunk)
+                .where(*conditions)
+                .order_by(DocumentChunk.chunk_index)
+                .limit(limit)
+                .offset(offset)
+            )
+            .mappings()
+            .all()
+        )
+        source_groups = {row["id"]: [] for row in rows}
+        if source_groups:
+            sources = connection.execute(
+                select(
+                    ChunkSource.chunk_id,
+                    ChunkSource.page_number,
+                    ChunkSource.start_char,
+                    ChunkSource.end_char,
+                    ChunkSource.chunk_start_char,
+                    ChunkSource.chunk_end_char,
+                )
+                .where(ChunkSource.chunk_id.in_(source_groups))
+                .order_by(ChunkSource.chunk_id, ChunkSource.page_number)
+            ).mappings()
+            for source in sources:
+                item = dict(source)
+                source_groups[item.pop("chunk_id")].append(item)
         chunks = [
-            {**row, "has_unmapped_characters": has_unmapped_characters(row["text"])} for row in rows
+            {
+                **row,
+                "token_count": count_tokens(row["text"]),
+                "page_numbers": [source["page_number"] for source in source_groups[row["id"]]],
+                "sources": source_groups[row["id"]],
+                "has_unmapped_characters": has_unmapped_characters(row["text"]),
+            }
+            for row in rows
         ]
     return {
         "document_id": document_id,

@@ -11,7 +11,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from jp_doc_agent.ingestion.download import PdfFile, download_pdf
 from jp_doc_agent.ingestion.pdf import PARSER_VERSION, extract_pages, has_unmapped_characters
-from jp_doc_agent.models import Document, DocumentPage
+from jp_doc_agent.models import Document, DocumentChunk, DocumentPage
 
 
 class Source(BaseModel):
@@ -75,6 +75,9 @@ def import_pdf(engine: Engine, pdf: PdfFile, *, title: str, source_url: str, dat
             if current["parser_version"] == PARSER_VERSION:
                 return {"status": "duplicate", "document_id": document_id, "pages": len(pages)}
             # Reparse after an extractor upgrade, preserving the document identity.
+            connection.execute(
+                delete(DocumentChunk).where(DocumentChunk.document_id == document_id)
+            )
             connection.execute(delete(DocumentPage).where(DocumentPage.document_id == document_id))
             connection.execute(
                 update(Document)
