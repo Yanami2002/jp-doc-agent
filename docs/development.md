@@ -1,17 +1,18 @@
-# 本地开发
+# ローカル開発ガイド
 
-所有命令均在仓库根目录执行。Python 在本机运行，PostgreSQL 在 Docker 中运行。
+コマンドはリポジトリのルートで実行してください。Python はホスト側、PostgreSQL は Docker コンテナで動かします。モデル API は取り込み・チャンク分割の実行には必要ありません。
 
-## 首次准备
+## 初回セットアップ
 
-需要 Git、uv 和已启动的 Docker Desktop。安装 Python 和项目依赖：
+Git、uv、起動済みの Docker Desktop を用意します。
 
 ```bash
 uv python install
 uv sync --locked
+cp .env.example .env
 ```
 
-首次克隆项目时，复制 `.env.example` 为 `.env`，将 `POSTGRES_PASSWORD` 改为随机密码。`.env` 已被 Git 忽略，不要提交密码。
+`.env` の `POSTGRES_PASSWORD` をランダムなパスワードに変更してから起動します。既に `.env` がある環境では上書きしないでください。
 
 ```bash
 docker compose up -d --wait
@@ -19,71 +20,91 @@ uv run alembic upgrade head
 uv run jp-doc-agent check-db
 ```
 
-检查成功会输出 `status: ok`、PostgreSQL 版本、pgvector 版本和向量距离 `1.0`。该命令只读取数据库，不创建业务表。
+接続確認に成功すると `status: ok`、PostgreSQL と pgvector のバージョン、ベクトル距離 `1.0` が返ります。`check-db` は読み取り専用で、業務テーブルは作成しません。
 
-默认使用 `127.0.0.1:5433`，避免与本机已有的 PostgreSQL（5432）冲突；数据库和用户名均为 `jp_doc_agent`，使用独立的容器与数据卷。
+既定の接続先は `127.0.0.1:5433`、DB 名・ユーザー名は `jp_doc_agent` です。独立したコンテナと永続化ボリュームを使います。
 
-## 常用命令
+## 日常の開発
 
 ```bash
-# 启动数据库并等待就绪
+# DB を起動
 docker compose up -d --wait
 
-# 检查数据库及向量运算
-uv run jp-doc-agent check-db
+# 依存関係とスキーマを最新のリポジトリに合わせる
+uv sync --locked
+uv run alembic upgrade head
 
-# 查看数据库状态和日志
+# ヘルプを確認
+uv run jp-doc-agent --help
+
+# PDF と評価データを取得
+uv run jp-doc-agent import-documents
+uv run jp-doc-agent fetch-benchmark
+
+# チャンクを生成して文書一覧を確認
+uv run jp-doc-agent chunk-documents
+uv run jp-doc-agent documents
+
+# テスト・静的検査・スキーマの差分確認
+uv run pytest -q
+uv run ruff check .
+uv run ruff format --check .
+uv run alembic check
+
+# コンテナの状態・ログ
 docker compose ps
 docker compose logs --tail 50 db
 
-# 检查代码和格式
-uv run ruff check .
-uv run ruff format --check .
-
-# 暂停数据库，保留数据
+# データを保持したまま停止
 docker compose stop
 ```
 
-修改 `.env` 中的密码不会修改已有数据库的密码；初始化 SQL 也只在空数据卷首次启动时运行。需要重新启用扩展时，可以对当前数据库执行已有脚本：
+文書 ID は `documents` の出力で確認してください。ページは `page <文書ID> <ページ番号>`、チャンクは `chunks <文書ID> --page <ページ番号>` で参照できます。
+
+## ファイル構成
+
+```text
+jp-doc-agent/
+├── README.md                 # 概要、実装状況、技術選定、評価方針
+├── pyproject.toml            # 依存関係、CLI、検査設定
+├── uv.lock                   # 依存バージョンの固定
+├── .python-version           # Python バージョン
+├── .env.example              # 設定のテンプレート
+├── compose.yaml              # PostgreSQL と永続化設定
+├── alembic.ini
+├── migrations/               # 文書・ページ・チャンクのスキーマ変更
+├── sources/                  # 公開 PDF の取得元とハッシュ
+├── docker/init.sql           # pgvector の有効化
+├── tests/                    # 単体テストと隔離した DB 統合テスト
+├── docs/
+│   ├── development.md        # 本ガイド
+│   ├── document-import.md    # PDF 取り込み
+│   └── chunking.md           # 分割方法、保存形式、検証結果
+└── src/jp_doc_agent/
+    ├── config.py             # .env から設定を読み込む
+    ├── database.py           # DB 接続と pgvector の確認
+    ├── cli.py                # CLI の引数と出力
+    ├── models.py             # データモデルと DB 制約
+    ├── benchmark.py          # 正解データを本文とは別に取得
+    ├── chunking.py           # 原文位置を検証してチャンクを保存
+    └── ingestion/
+        ├── download.py       # ダウンロード、形式・サイズ・ハッシュの確認
+        ├── pdf.py            # ページ単位の日本語本文抽出
+        └── service.py        # 取り込みとページ参照
+```
+
+`.env`、`.venv/`、`data/`、キャッシュは Git の管理対象外です。FastAPI と LangGraph は対応機能の実装時に追加します。
+
+## データベースの注意点
+
+`.env` のパスワードを書き換えても、作成済みの DB のパスワードは変更されません。初期化 SQL は空のボリュームから初めて起動したときにだけ実行されます。既存の DB で拡張を有効にする場合は次のコマンドを使います。
 
 ```bash
 docker compose exec -T db sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < docker/init.sql
 ```
 
-## 文件结构
+Docker に接続できない場合は Docker Desktop の起動を確認してください。テストの DB fixture は一時 schema を作成・削除するため、その権限が必要です。
 
-```text
-jp-doc-agent/
-├── README.md                 # 项目需求与开发进度
-├── pyproject.toml            # 项目依赖、命令入口、代码检查配置
-├── uv.lock                   # 锁定依赖版本，提交到 Git
-├── .python-version           # Python 版本
-├── .env.example              # 可提交的配置模板
-├── .env                      # 本机配置与密码，不提交
-├── .gitignore                # 排除环境、密码、缓存和下载数据
-├── compose.yaml              # PostgreSQL 容器、端口和持久化配置
-├── alembic.ini               # 数据库迁移配置
-├── migrations/              # 版本化的表结构变更
-├── sources/                 # 公开 PDF 来源清单
-├── tests/                   # 隔离运行的数据库集成测试
-├── docker/
-│   └── init.sql              # 首次启动时启用 pgvector
-├── docs/
-│   ├── development.md        # 本文：启动方式与文件说明
-│   └── document-import.md    # 文档导入流程、命令与模块说明
-└── src/
-    └── jp_doc_agent/
-        ├── __init__.py       # Python 包标识
-        ├── config.py         # 读取配置，构建数据库连接地址
-        ├── database.py       # 创建连接，检查数据库与向量运算
-        ├── cli.py            # jp-doc-agent 命令入口
-        ├── models.py         # 文档与页面的数据模型
-        ├── benchmark.py      # 单独下载数据集原始评测标注
-        └── ingestion/        # PDF 下载、解析和入库
-```
+## Git の運用
 
-`.venv/` 是 uv 自动生成的本地 Python 环境，不属于源码。
-
-目前已安装 SQLAlchemy、psycopg、配置管理、httpx、pypdf[crypto]、pdfminer.six 和 Alembic，以及 Ruff、pytest 开发工具。FastAPI 和 LangGraph 在开发对应功能时加入。
-
-文档导入已完成，运行方式和新增文件说明见 [文档导入](document-import.md)。下一步是页面正文切分和基础检索。
+機能開発は `feat/basic-rag` のようなブランチで行い、動作確認できる単位でコミットします。必要なテスト・説明を含めて GitHub に push し、機能が利用可能になったら PR を通して `main` に統合します。PR には変更点と確認結果を記載します。
