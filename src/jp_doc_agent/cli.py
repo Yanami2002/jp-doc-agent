@@ -1,4 +1,4 @@
-"""Command-line entry point for local development."""
+"""ローカル開発用 CLI の引数・実行・JSON 出力を管理する。"""
 
 import argparse
 import json
@@ -13,13 +13,18 @@ from pydantic import ValidationError
 from pypdf.errors import PyPdfError
 from sqlalchemy.exc import SQLAlchemyError
 
+from jp_doc_agent.agent.schema import AgentLimits
+from jp_doc_agent.agent.service import agent_ask
+from jp_doc_agent.answering.generator import OpenAIAnswerGenerator
+from jp_doc_agent.answering.service import ask
 from jp_doc_agent.benchmark import fetch_benchmark
 from jp_doc_agent.chunking.service import chunk_documents, list_chunks
 from jp_doc_agent.chunking.splitter import ChunkingConfig
-from jp_doc_agent.config import EMBEDDING_MODEL, OpenAISettings, Settings
+from jp_doc_agent.config import EMBEDDING_MODEL, AnsweringSettings, OpenAISettings, Settings
 from jp_doc_agent.database import check_database, create_database_engine
 from jp_doc_agent.embedding.encoder import OpenAIEncoder
 from jp_doc_agent.embedding.service import embed_documents, embedding_status
+from jp_doc_agent.evaluation.service import compare, evaluate, load_cases, write_report
 from jp_doc_agent.ingestion.download import copy_local_pdf
 from jp_doc_agent.ingestion.service import import_manifest, import_pdf, list_documents, read_page
 from jp_doc_agent.retrieval.service import search
@@ -98,6 +103,23 @@ def build_parser() -> argparse.ArgumentParser:
     retrieval.add_argument("query", help="日本語の質問")
     retrieval.add_argument("--top-k", type=int, default=5, help="取得件数（1〜100、既定値: 5）")
     retrieval.add_argument("--document-id", type=int, help="対象文書 ID（省略時は全件）")
+    answering = commands.add_parser("ask", help="検索した原文を根拠に日本語で回答・引用を生成")
+    answering.add_argument("query", help="日本語の質問")
+    answering.add_argument("--top-k", type=int, default=5, help="検索件数（1〜100、既定値: 5）")
+    answering.add_argument("--document-id", type=int, help="対象文書 ID（省略時は全件）")
+    agent = commands.add_parser("agent-ask", help="証拠を判断し、必要に応じて追加調査")
+    agent.add_argument("query", help="日本語の質問")
+    agent.add_argument("--top-k", type=int, default=5, help="検索件数（1〜20、既定値: 5）")
+    agent.add_argument("--document-id", type=int, help="対象文書 ID（省略時は全件）")
+    agent.add_argument("--max-searches", type=int, default=3, help="検索上限（1〜3）")
+    agent.add_argument("--max-tool-calls", type=int, default=6, help="道具の呼び出し上限（1〜8）")
+    agent.add_argument("--output", type=Path, help="実行記録の保存先（省略時は data/reports）")
+    evaluation = commands.add_parser("evaluate-rag", help="固定ケースで検索・回答・引用を検証")
+    evaluation.add_argument("--mode", choices=("baseline", "agent", "compare"), default="baseline")
+    evaluation.add_argument("--cases", type=Path, default=Path("evaluation/basic-rag.json"))
+    evaluation.add_argument(
+        "--output", type=Path, help="結果 JSON の保存先（省略時は data/reports）"
+    )
     return parser
 
 
@@ -141,6 +163,68 @@ def main() -> int:
             }
             print(json.dumps(result, ensure_ascii=False, indent=2))
             return 1 if result["failed_documents"] else 0
+        elif args.command in ("ask", "agent-ask", "evaluate-rag"):
+            try:
+                answer_settings = AnsweringSettings()
+            except ValidationError:
+                raise ValueError(".env の回答モデルと出力 Token 上限を確認してください。") from None
+            limits = (
+                AgentLimits(max_searches=args.max_searches, max_tool_calls=args.max_tool_calls)
+                if args.command == "agent-ask"
+                else None
+            )
+            with _openai_encoder() as encoder:
+                generator = OpenAIAnswerGenerator(
+                    encoder.client,
+                    model=answer_settings.answer_model,
+                    max_output_tokens=answer_settings.answer_max_output_tokens,
+                )
+                if args.command == "ask":
+                    result = ask(
+                        engine,
+                        encoder,
+                        generator,
+                        args.query,
+                        top_k=args.top_k,
+                        document_id=args.document_id,
+                    )
+                elif args.command == "agent-ask":
+                    result = agent_ask(
+                        engine,
+                        encoder,
+                        generator,
+                        args.query,
+                        top_k=args.top_k,
+                        document_id=args.document_id,
+                        limits=limits,
+                    )
+                    output = args.output or Path(
+                        f"data/reports/agent-{datetime.now(UTC):%Y%m%dT%H%M%S%fZ}.json"
+                    )
+                    write_report(result, output)
+                    print(
+                        json.dumps({**result, "report": str(output)}, ensure_ascii=False, indent=2)
+                    )
+                    return 1 if result["status"] == "error" else 0
+                else:
+                    cases = load_cases(args.cases)
+                    report = (
+                        compare(engine, encoder, generator, cases)
+                        if args.mode == "compare"
+                        else evaluate(engine, encoder, generator, cases, mode=args.mode)
+                    )
+                    output = args.output or Path(
+                        f"data/reports/rag-{datetime.now(UTC):%Y%m%dT%H%M%S%fZ}.json"
+                    )
+                    write_report(report, output)
+                    print(
+                        json.dumps(
+                            {**report["summary"], "report": str(output)},
+                            ensure_ascii=False,
+                            indent=2,
+                        )
+                    )
+                    return 1 if report["summary"]["errors"] else 0
         elif args.command == "search":
             with _openai_encoder() as encoder:
                 result = search(

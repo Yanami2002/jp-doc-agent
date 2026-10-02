@@ -1,12 +1,17 @@
-"""Preserve page-local data on upgrade; invalidate only derived data on downgrade."""
+"""スキーマ移行で原文・ページ・出典が保持されることを確認する。"""
 
+import json
 from datetime import UTC, datetime
 
+import httpx
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import func, insert, select, text
 
-from jp_doc_agent.models import ChunkSource, Document, DocumentChunk, DocumentPage
+from jp_doc_agent.chunking.service import chunk_document
+from jp_doc_agent.chunking.splitter import ChunkingConfig
+from jp_doc_agent.embedding.service import embed_document
+from jp_doc_agent.models import ChunkEmbedding, ChunkSource, Document, DocumentChunk, DocumentPage
 
 
 def test_cross_page_migration_preserves_old_chunks_and_pages(engine):
@@ -74,3 +79,33 @@ def test_cross_page_migration_preserves_old_chunks_and_pages(engine):
         assert connection.scalar(select(func.count()).select_from(DocumentChunk)) == 0
         command.upgrade(config, "head")
         assert connection.scalar(select(func.count()).select_from(ChunkSource)) == 0
+
+
+def test_embedding_upgrade_and_downgrade_preserve_source_data(
+    engine, text_document, encoder_factory, api_response
+):
+    identifier = text_document(["対象者は学生です。", "期限を確認してください。"])
+    chunk_document(engine, identifier, ChunkingConfig())
+    encoder = encoder_factory(
+        lambda request: httpx.Response(200, json=api_response(json.loads(request.content)["input"]))
+    )
+    assert embed_document(engine, encoder, identifier)["embedded"] == 1
+    with engine.begin() as connection:
+
+        def source_snapshot():
+            return {
+                model.__tablename__: connection.execute(select(model)).mappings().all()
+                for model in (DocumentPage, DocumentChunk, ChunkSource)
+            }
+
+        before = source_snapshot()
+        config = Config("alembic.ini")
+        config.attributes.update(
+            connection=connection,
+            version_table_schema=connection.scalar(text("SELECT current_schema()")),
+        )
+        command.downgrade(config, "0003_cross_page_chunks")
+        assert source_snapshot() == before
+        command.upgrade(config, "head")
+        assert source_snapshot() == before
+        assert connection.scalar(select(func.count()).select_from(ChunkEmbedding)) == 0

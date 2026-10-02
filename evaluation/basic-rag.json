@@ -1,0 +1,45 @@
+[
+  {
+    "id": "financial-revenue-scoped",
+    "question": "2024年度第2四半期の売上収益はいくらですか？",
+    "scope_document_sha256": "8b2b3046b8081e1810fda6c86be27a5c802def782e64678047a0ea55ad70e17a",
+    "top_k": 5,
+    "expected_status": "answered",
+    "expected_evidence": [
+      {
+        "document_sha256": "8b2b3046b8081e1810fda6c86be27a5c802def782e64678047a0ea55ad70e17a",
+        "page_number": 30
+      },
+      {
+        "document_sha256": "8b2b3046b8081e1810fda6c86be27a5c802def782e64678047a0ea55ad70e17a",
+        "page_number": 31
+      },
+      {
+        "document_sha256": "8b2b3046b8081e1810fda6c86be27a5c802def782e64678047a0ea55ad70e17a",
+        "page_number": 33
+      }
+    ],
+    "answer_contains": ["8666", "億円"]
+  },
+  {
+    "id": "organization-full-corpus",
+    "question": "2021年1月1日時点の富士通の組織構成はどうなっていますか？",
+    "top_k": 5,
+    "expected_status": "answered",
+    "expected_evidence": [
+      {
+        "document_sha256": "2995aaa2bb1e22298fc329fad1d4376448b689f2b85a1fe6495978a1181455ed",
+        "page_number": 1
+      }
+    ],
+    "answer_contains": []
+  },
+  {
+    "id": "unsupported-year",
+    "question": "富士通の2028年度第2四半期の売上収益はいくらですか？",
+    "top_k": 5,
+    "expected_status": "insufficient_evidence",
+    "expected_evidence": [],
+    "answer_contains": []
+  }
+]

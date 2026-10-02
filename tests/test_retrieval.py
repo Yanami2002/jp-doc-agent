@@ -2,7 +2,6 @@
 
 import json
 
-import httpx
 import pytest
 from sqlalchemy import delete, event, insert, select, update
 
@@ -10,8 +9,7 @@ from jp_doc_agent import cli
 from jp_doc_agent.chunking.service import chunk_document
 from jp_doc_agent.chunking.splitter import ChunkingConfig
 from jp_doc_agent.config import OpenAISettings
-from jp_doc_agent.embedding.encoder import EmbeddingError, profile_id
-from jp_doc_agent.embedding.service import embed_document
+from jp_doc_agent.embedding.encoder import profile_id
 from jp_doc_agent.models import (
     ChunkEmbedding,
     ChunkSource,
@@ -20,39 +18,6 @@ from jp_doc_agent.models import (
     EmbeddingProfile,
 )
 from jp_doc_agent.retrieval.service import search
-
-
-@pytest.fixture
-def ready_document(engine, text_document, encoder_factory, api_response):
-    def build(pages, *, vector=(1.0, 0.0)):
-        identifier = text_document(pages)
-        chunk_document(engine, identifier, ChunkingConfig())
-
-        def handler(request):
-            response = api_response(json.loads(request.content)["input"])
-            for item in response["data"]:
-                item["embedding"] = list(vector) + [0.0] * (1536 - len(vector))
-            return httpx.Response(200, json=response)
-
-        result = embed_document(engine, encoder_factory(handler), identifier)
-        assert result["status"] == "embedded"
-        return identifier
-
-    return build
-
-
-@pytest.fixture
-def query_encoder(encoder_factory, api_response):
-    state = {"calls": [], "during_api": None}
-
-    def handler(request):
-        body = json.loads(request.content)
-        state["calls"].append(body)
-        if state["during_api"]:
-            state["during_api"]()
-        return httpx.Response(200, json=api_response(body["input"]))
-
-    return encoder_factory(handler), state
 
 
 def test_cosine_ranking_top_k_filter_and_no_query_persistence(
@@ -279,15 +244,3 @@ def test_cli_missing_api_key_is_safe(engine, monkeypatch, capsys):
     monkeypatch.setattr("sys.argv", ["jp-doc-agent", "search", "対象は？"])
     assert cli.main() == 1
     assert "OPENAI_API_KEY" in capsys.readouterr().err
-
-
-def test_query_api_failure_does_not_expose_secret(engine, ready_document, encoder_factory):
-    ready_document(["対象者は学生です。"])
-
-    def handler(request):
-        return httpx.Response(401, json={"error": {"message": "secret-value test-key"}})
-
-    with pytest.raises(EmbeddingError, match="HTTP 401") as error:
-        search(engine, encoder_factory(handler), "対象は？")
-    assert "secret-value" not in str(error.value)
-    assert "test-key" not in str(error.value)

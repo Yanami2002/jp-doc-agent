@@ -64,7 +64,7 @@ CLI の `embedded` は今回保存した件数、`skipped` は再利用した件
 ## 確認と次の段階
 
 ```bash
-uv run pytest -q tests/test_embedding.py tests/test_embedding_service.py tests/test_embedding_migrations.py
+uv run pytest -q tests/test_embedding.py tests/test_migrations.py
 uv run ruff check .
 uv run ruff format --check .
 uv run alembic check
@@ -74,4 +74,4 @@ HTTP 応答のモックと実際の PostgreSQL の一時 schema を使用して�
 
 ローカル検証では、実 API を使って 5 文書・1,037 チャンクのベクトルを全件保存しました。各ベクトルは 1,536 次元、未処理件数は 0 です。再実行すると全件をスキップし、API 応答数と Token 使用量はともに 0 になりました。元の 170 ページと 1,235 件の出典範囲も保持されています。これはベクトル化と保存の動作確認であり、検索品質の評価ではありません。
 
-質問のベクトル化・余弦距離での検索・全出典付きの結果返却は [ベクトル検索](retrieval.md) で実装済みです。回答生成と検索品質の評価は未実装です。HNSW などの近似検索インデックスは、検索の基準と性能を測定した後に検討します。
+質問のベクトル化・余弦距離での検索・全出典付きの結果返却は [ベクトル検索](retrieval.md) で実装済みです。回答生成は [基本 RAG 問答](answering.md) で実装済みです。開発用の [固定ケース検証](evaluation.md) を記録し、本格的な検索品質の評価は今後実施します。HNSW などの近似検索インデックスは、検索の基準と性能を測定した後に検討します。

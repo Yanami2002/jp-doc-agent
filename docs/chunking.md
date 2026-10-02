@@ -111,9 +111,7 @@ uv run jp-doc-agent chunk-documents
 テストでは、日本語の句点、改行、反復文、Unicode、長文、300 Token 上限、英語の Token 数と文字数の違い、特殊トークン風の本文、重複上限、ページをまたぐ文、白紙ページ、原文位置、出典ページでの絞り込み、設定変更、チャンクと出典の保存失敗、並行処理、再解析、CLI、旧データのマイグレーションを確認しています。
 
 ```bash
-uv run pytest -q tests/test_chunking.py
-uv run pytest -q tests/test_chunk_service.py
-uv run pytest -q tests/test_chunk_migrations.py
+uv run pytest -q tests/test_chunking.py tests/test_migrations.py
 ```
 
 ページをまたぐことはできますが、全ての文の完全性を保証するものではありません。Token 数上限や段落境界では分割されます。見出しの階層、ヘッダー・フッター、表の行・列関係、図の内容も復元していません。後続では、必要な周辺文脈を検索結果に補う方法を評価します。検索の改善は、分割結果の見た目やチャンク数だけで判断せず、証拠ページの取得率と回答結果で確認します。

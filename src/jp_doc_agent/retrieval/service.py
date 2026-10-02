@@ -3,6 +3,7 @@
 from sqlalchemy import Select, func, select
 from sqlalchemy.engine import Connection, Engine
 
+from jp_doc_agent.chunking.splitter import count_tokens
 from jp_doc_agent.config import EMBEDDING_DIMENSIONS, EMBEDDING_MODEL
 from jp_doc_agent.embedding.encoder import OpenAIEncoder, profile_id, validate_query
 from jp_doc_agent.ingestion.pdf import has_unmapped_characters
@@ -75,6 +76,7 @@ def _search_results(
                 Document.title,
                 Document.source_url,
                 Document.resolved_url,
+                Document.chunking_signature,
                 candidates.c.token_count,
                 distance,
             )
@@ -88,7 +90,11 @@ def _search_results(
         .mappings()
         .all()
     )
-    hits = {row["chunk_id"]: dict(row) for row in rows}
+    return _attach_sources(connection, [dict(row) for row in rows])
+
+
+def _attach_sources(connection: Connection, rows: list[dict]) -> list[dict]:
+    hits = {row["chunk_id"]: row for row in rows}
     sources = {chunk_id: [] for chunk_id in hits}
     if hits:
         source_rows = connection.execute(
@@ -133,13 +139,72 @@ def _search_results(
             {
                 "rank": rank,
                 **hit,
-                "cosine_similarity": 1.0 - hit["cosine_distance"],
+                "cosine_similarity": (
+                    1.0 - hit["cosine_distance"] if "cosine_distance" in hit else None
+                ),
                 "page_numbers": [source["page_number"] for source in sources[chunk_id]],
                 "sources": sources[chunk_id],
                 "has_unmapped_characters": has_unmapped_characters(hit["text"]),
             }
         )
     return results
+
+
+def read_page_evidence(engine: Engine, document_id: int, page_number: int) -> dict:
+    """物理ページに重なる実チャンクと原文を、一つのスナップショットで読む。"""
+    with engine.connect().execution_options(isolation_level="REPEATABLE READ") as connection:
+        page = (
+            connection.execute(
+                select(Document.title, DocumentPage.text)
+                .join(DocumentPage, DocumentPage.document_id == Document.id)
+                .where(Document.id == document_id, DocumentPage.page_number == page_number)
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if page is None:
+            raise ValueError("指定された文書または物理ページが見つかりません。")
+        rows = (
+            connection.execute(
+                select(
+                    DocumentChunk.id.label("chunk_id"),
+                    DocumentChunk.document_id,
+                    DocumentChunk.chunk_index,
+                    DocumentChunk.text,
+                    DocumentChunk.start_char,
+                    DocumentChunk.end_char,
+                    Document.title,
+                    Document.source_url,
+                    Document.resolved_url,
+                    Document.chunking_signature,
+                )
+                .join(Document, Document.id == DocumentChunk.document_id)
+                .where(
+                    DocumentChunk.id.in_(
+                        select(ChunkSource.chunk_id).where(
+                            ChunkSource.document_id == document_id,
+                            ChunkSource.page_number == page_number,
+                        )
+                    )
+                )
+                .order_by(DocumentChunk.chunk_index)
+                .limit(101)
+            )
+            .mappings()
+            .all()
+        )
+        if not rows:
+            raise ValueError(
+                "指定ページにチャンクがありません。chunk-documents を確認してください。"
+            )
+        if len(rows) > 100:
+            raise ValueError(
+                "1 ページのチャンクが 100 件を超えています。分割設定を確認してください。"
+            )
+        hits = _attach_sources(
+            connection, [{**row, "token_count": count_tokens(row["text"])} for row in rows]
+        )
+    return {"document_id": document_id, "page_number": page_number, **page, "results": hits}
 
 
 def search(

@@ -1,4 +1,4 @@
-"""Run integration tests in temporary PostgreSQL schemas, never in application tables."""
+"""PostgreSQL の一時スキーマと共通 fixture で業務データを変更せず検証する。"""
 
 import hashlib
 import json
@@ -15,9 +15,12 @@ from pypdf import PdfWriter
 from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 from sqlalchemy import create_engine, insert, text
 
-from jp_doc_agent.config import EMBEDDING_DIMENSIONS, EMBEDDING_MODEL, Settings
+from jp_doc_agent.chunking.service import chunk_document
+from jp_doc_agent.chunking.splitter import ChunkingConfig
+from jp_doc_agent.config import ANSWER_MODEL, EMBEDDING_DIMENSIONS, EMBEDDING_MODEL, Settings
 from jp_doc_agent.database import create_database_engine
 from jp_doc_agent.embedding.encoder import OpenAIEncoder
+from jp_doc_agent.embedding.service import embed_document
 from jp_doc_agent.models import Document, DocumentPage
 
 
@@ -47,7 +50,7 @@ def engine():
 
 @pytest.fixture
 def pdf_bytes():
-    """Small synthetic fixtures test edge cases; real PDFs are validated separately."""
+    """小さな PDF で境界条件を検証する。実 PDF の確認は別に行う。"""
 
     def build(pages):
         writer = PdfWriter()
@@ -139,3 +142,103 @@ def encoder_factory():
     yield build
     for client in clients:
         client.close()
+
+
+@pytest.fixture
+def ready_document(engine, text_document, encoder_factory, api_response):
+    def build(pages, *, vector=(1.0, 0.0)):
+        identifier = text_document(pages)
+        chunk_document(engine, identifier, ChunkingConfig())
+
+        def handler(request):
+            response = api_response(json.loads(request.content)["input"])
+            for item in response["data"]:
+                item["embedding"] = list(vector) + [0.0] * (1536 - len(vector))
+            return httpx.Response(200, json=response)
+
+        result = embed_document(engine, encoder_factory(handler), identifier)
+        assert result["status"] == "embedded"
+        return identifier
+
+    return build
+
+
+@pytest.fixture
+def query_encoder(encoder_factory, api_response):
+    state = {"calls": [], "during_api": None}
+
+    def handler(request):
+        body = json.loads(request.content)
+        state["calls"].append(body)
+        if state["during_api"]:
+            state["during_api"]()
+        return httpx.Response(200, json=api_response(body["input"]))
+
+    return encoder_factory(handler), state
+
+
+@pytest.fixture
+def answer_response():
+    def build(draft, *, model=ANSWER_MODEL):
+        return {
+            "id": "resp_test",
+            "object": "response",
+            "created_at": 0.0,
+            "model": model,
+            "status": "completed",
+            "parallel_tool_calls": False,
+            "tool_choice": "none",
+            "tools": [],
+            "output": [
+                {
+                    "id": "msg_test",
+                    "type": "message",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "annotations": [],
+                            "text": json.dumps(draft, ensure_ascii=False),
+                        }
+                    ],
+                }
+            ],
+            "usage": {
+                "input_tokens": 50,
+                "output_tokens": 20,
+                "total_tokens": 70,
+                "input_tokens_details": {"cached_tokens": 0},
+                "output_tokens_details": {"reasoning_tokens": 0},
+            },
+        }
+
+    return build
+
+
+@pytest.fixture
+def rag_encoder(encoder_factory, api_response, answer_response):
+    state = {"calls": [], "draft": None, "during_answer": None}
+
+    def handler(request):
+        body = json.loads(request.content)
+        state["calls"].append((request.url.path, body))
+        if request.url.path == "/v1/embeddings":
+            return httpx.Response(200, json=api_response(body["input"]))
+        assert request.url.path == "/v1/responses"
+        if state["during_answer"]:
+            state["during_answer"]()
+        evidence = json.loads(body["input"][1]["content"])["evidence"][0]
+        draft = state["draft"] or {
+            "status": "answered",
+            "statements": [
+                {
+                    "text": "資料に対象条件が記載されています。",
+                    "citations": [{"chunk_id": evidence["chunk_id"], "quote": evidence["text"]}],
+                }
+            ],
+            "missing_information": [],
+        }
+        return httpx.Response(200, json=answer_response(draft))
+
+    return encoder_factory(handler), state

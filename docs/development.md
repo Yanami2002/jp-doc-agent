@@ -52,6 +52,14 @@ uv run jp-doc-agent embedding-status
 # 関連する本文と出典を検索
 uv run jp-doc-agent search "2024年度第2四半期の売上収益はいくらですか？" --top-k 5
 
+# 日本語の回答・原文引用を生成し、固定ケースを確認
+uv run jp-doc-agent ask "2024年度第2四半期の売上収益はいくらですか？"
+uv run jp-doc-agent evaluate-rag
+
+# 追加調査と実行記録、基本 RAG との比較
+uv run jp-doc-agent agent-ask "2021年1月1日時点の富士通の組織構成はどうなっていますか？"
+uv run jp-doc-agent evaluate-rag --mode compare
+
 # テスト・静的検査・スキーマの差分確認
 uv run pytest -q
 uv run ruff check .
@@ -81,27 +89,32 @@ jp-doc-agent/
 ├── alembic.ini
 ├── migrations/               # 文書・ページ・チャンク・ベクトルのスキーマ変更
 ├── sources/                  # 公開 PDF の取得元とハッシュ
+├── evaluation/basic-rag.json # 開発用の質問・許容証拠ページ・期待値
 ├── docker/init.sql           # pgvector の有効化
 ├── tests/
-│   ├── conftest.py           # 一時 DB schema と PDF fixture
+│   ├── conftest.py           # 一時 DB schema と PDF・モデル API fixture
 │   ├── test_ingestion.py    # PDF 取り込みの検証
-│   ├── test_chunking.py     # DB を使わない分割・原文位置の検証
-│   ├── test_chunk_service.py # 保存・参照・再生成・CLI の検証
-│   ├── test_chunk_migrations.py # 旧スキーマからの移行と復元
-│   ├── test_embedding.py     # API 応答と SDK のリトライ
-│   ├── test_embedding_service.py # ベクトル保存・再開・競合
-│   ├── test_embedding_migrations.py # ベクトルのスキーマ移行
-│   └── test_retrieval.py     # 検索順位、範囲、出典、並行更新
+│   ├── test_chunking.py     # 分割・原文位置・保存・再生成・CLI
+│   ├── test_embedding.py    # API 応答・リトライ・保存・再開・競合
+│   ├── test_migrations.py   # スキーマ移行で原文・出典を保持
+│   ├── test_retrieval.py     # 検索順位、範囲、出典、並行更新
+│   ├── test_answering.py     # 構造化回答、引用照合、根拠不足、失敗表示
+│   ├── test_agent.py         # 追加調査、停止上限、範囲、失敗記録
+│   └── test_evaluation.py    # 期待値の隔離、判定、失敗記録
 ├── docs/
 │   ├── development.md        # 本ガイド
 │   ├── document-import.md    # PDF 取り込み
 │   ├── chunking.md           # 分割方法、保存形式、検証結果
 │   ├── embedding.md          # API 接続、ベクトル保存、再開
-│   └── retrieval.md          # 検索方法、出典、未処理範囲
+│   ├── retrieval.md          # 検索方法、出典、未処理範囲
+│   ├── answering.md          # 回答生成、構造化出力、引用の検証
+│   ├── agent.md              # 道具、状態遷移、停止条件、実行記録
+│   └── evaluation.md         # 固定ケース、判定、実 API の成功・失敗
 └── src/jp_doc_agent/
     ├── config.py             # .env から設定を読み込む
     ├── database.py           # DB 接続と pgvector の確認
     ├── cli.py                # CLI の引数と出力
+    ├── llm.py                # 回答・道具選択で共用する構造化出力 API
     ├── models.py             # データモデルと DB 制約
     ├── benchmark.py          # 正解データを本文とは別に取得
     ├── chunking/
@@ -112,15 +125,27 @@ jp-doc-agent/
     │   └── service.py        # バッチ保存、重複スキップ、保存件数の確認
     ├── retrieval/
     │   └── service.py        # 余弦距離検索、文書範囲、出典検証
+    ├── answering/
+    │   ├── schema.py         # 結論・引用・根拠不足の草案
+    │   ├── generator.py      # 回答用の指示と草案生成
+    │   └── service.py        # 検索との連携、引用照合、原文位置の補完
+    ├── agent/
+    │   ├── schema.py         # 状態、道具の引数、実行上限
+    │   ├── tools.py          # 検索・文書一覧・原文ページの参照
+    │   └── service.py        # LangGraph の追加調査、停止、実行記録
+    ├── evaluation/
+    │   └── service.py        # 期待値の隔離、証拠と回答の確認、レポート
     └── ingestion/
         ├── download.py       # ダウンロード、形式・サイズ・ハッシュの確認
         ├── pdf.py            # ページ単位の日本語本文抽出
         └── service.py        # 取り込みとページ参照
 ```
 
-`.env`、`.venv/`、`data/`、キャッシュは Git の管理対象外です。FastAPI と LangGraph は対応機能の実装時に追加します。
+`.env`、`.venv/`、`data/`、キャッシュは Git の管理対象外です。Agent と評価の JSON レポートは `data/reports/` に保存します。LangGraph は Agent に使用中で、FastAPI は Web API の実装時に追加します。
 
-機能ごとの処理は `ingestion/`、`chunking/`、`embedding/`、`retrieval/` に置き、設定・接続・モデル・CLI は共通部分としてパッケージ直下に置きます。`chunking/splitter.py` は DB 接続や PDF の取得に依存せず、`chunking/service.py` がトランザクションと永続化を担当します。`retrieval/service.py` が Embedding API を再利用し、検索 SQL と出典検証を担当します。`migrations/versions/` は適用済み環境を更新するための履歴なので、古いファイルも保持します。
+機能ごとの処理は `ingestion/`、`chunking/`、`embedding/`、`retrieval/`、`answering/`、`agent/`、`evaluation/` に置き、設定・接続・データモデル・モデル API・CLI は共通部分としてパッケージ直下に置きます。`chunking/splitter.py` は DB 接続や PDF の取得に依存せず、`chunking/service.py` がトランザクションと永続化を担当します。`retrieval/service.py` が Embedding API を再利用し、検索 SQL と出典検証を担当します。回答と Agent は `llm.py` の構造化出力を共用し、評価の期待値を渡しません。Agent の道具は既存の参照処理を再利用します。`migrations/versions/` は適用済み環境を更新するための履歴なので、古いファイルも保持します。
+
+テストは 8 ファイルにまとめ、分割と保存、Embedding API と保存をそれぞれ同じ機能のファイルに統合しました。移行テストも `test_migrations.py` に統合し、重複する引数検証・既定値や固定ケース名だけの確認を削除しました。並行処理・ロールバック・失敗後の再開・原文一致の検証は保持しています。
 
 ## データベースの注意点
 
