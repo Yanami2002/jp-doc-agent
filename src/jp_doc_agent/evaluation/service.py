@@ -1,6 +1,5 @@
 """評価の期待値をモデルに送らず、証拠ページ・引用・回答を個別に確認する。"""
 
-import json
 import unicodedata
 from pathlib import Path
 from typing import Literal
@@ -11,7 +10,6 @@ from sqlalchemy.engine import Engine
 
 from jp_doc_agent.agent.service import agent_ask
 from jp_doc_agent.answering.generator import OpenAIAnswerGenerator
-from jp_doc_agent.answering.service import ask
 from jp_doc_agent.embedding.encoder import EmbeddingError, OpenAIEncoder, validate_query
 from jp_doc_agent.llm import ModelError
 from jp_doc_agent.models import Document
@@ -28,7 +26,7 @@ class EvaluationCase(BaseModel):
     id: str = Field(min_length=1)
     question: str = Field(min_length=1)
     scope_document_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
-    top_k: int = Field(default=5, ge=1, le=100)
+    top_k: int = Field(default=5, ge=1, le=20)
     expected_status: Literal["answered", "insufficient_evidence"]
     expected_evidence: list[EvidenceReference] = Field(default_factory=list)
     answer_contains: list[str] = Field(default_factory=list)
@@ -89,12 +87,8 @@ def evaluate(
     encoder: OpenAIEncoder,
     generator: OpenAIAnswerGenerator,
     cases: list[EvaluationCase],
-    *,
-    mode: Literal["baseline", "agent"] = "baseline",
 ) -> dict:
-    if mode not in ("baseline", "agent"):
-        raise ValueError("評価モードは baseline または agent にしてください。")
-    if mode == "agent" and any(case.top_k > 20 for case in cases):
+    if any(case.top_k > 20 for case in cases):
         raise ValueError("Agent の評価では top-k を 1〜20 にしてください。")
     if not cases or len({case.id for case in cases}) != len(cases):
         raise ValueError("評価ケースは 1 件以上必要で、ID は重複できません。")
@@ -126,7 +120,7 @@ def evaluate(
     for case in cases:
         try:
             # 期待ステータス・証拠ページ・キーワードは調査処理に渡さない。
-            result = (agent_ask if mode == "agent" else ask)(
+            result = agent_ask(
                 engine,
                 encoder,
                 generator,
@@ -161,7 +155,7 @@ def evaluate(
     passed = sum(item["checks"]["passed"] for item in completed)
     recorded = [item["result"] for item in results if "result" in item]
     return {
-        "mode": mode,
+        "workflow": "agent",
         "summary": {
             "cases": len(cases),
             "passed": passed,
@@ -184,49 +178,9 @@ def evaluate(
             },
             "elapsed_seconds": round(sum(result["elapsed_seconds"] for result in recorded), 3),
             "counts": {
-                key: sum(
-                    result.get("counts", {"searches": 1, "tool_calls": 1, "model_calls": 1})[key]
-                    for result in recorded
-                )
+                key: sum(result["counts"][key] for result in recorded)
                 for key in ("searches", "tool_calls", "model_calls")
             },
         },
         "results": results,
     }
-
-
-def compare(
-    engine: Engine,
-    encoder: OpenAIEncoder,
-    generator: OpenAIAnswerGenerator,
-    cases: list[EvaluationCase],
-) -> dict:
-    if any(case.top_k > 20 for case in cases):
-        raise ValueError("比較評価では top-k を 1〜20 にしてください。")
-    baseline = evaluate(engine, encoder, generator, cases)
-    agent = evaluate(engine, encoder, generator, cases, mode="agent")
-    changes = {"resolved": [], "regressions": []}
-    for before, after in zip(baseline["results"], agent["results"], strict=True):
-        if before["status"] != "completed" or after["status"] != "completed":
-            continue
-        if not before["checks"]["passed"] and after["checks"]["passed"]:
-            changes["resolved"].append(after["case"]["id"])
-        if before["checks"]["passed"] and not after["checks"]["passed"]:
-            changes["regressions"].append(after["case"]["id"])
-    return {
-        "mode": "compare",
-        "summary": {
-            "cases": len(cases),
-            "baseline": baseline["summary"],
-            "agent": agent["summary"],
-            "errors": baseline["summary"]["errors"] + agent["summary"]["errors"],
-            **changes,
-        },
-        "baseline": baseline,
-        "agent": agent,
-    }
-
-
-def write_report(report: dict, output: Path) -> None:
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")

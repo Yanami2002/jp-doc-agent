@@ -11,9 +11,9 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from jp_doc_agent.agent.schema import AgentLimits, AgentState, ToolDecision
 from jp_doc_agent.agent.tools import ResearchTools
+from jp_doc_agent.answering.citations import resolve_answer
 from jp_doc_agent.answering.generator import OpenAIAnswerGenerator
 from jp_doc_agent.answering.schema import AnswerDraft
-from jp_doc_agent.answering.service import resolve_answer
 from jp_doc_agent.chunking.splitter import count_tokens
 from jp_doc_agent.embedding.encoder import EmbeddingError, OpenAIEncoder, profile_id, validate_query
 from jp_doc_agent.llm import ModelError
@@ -307,7 +307,18 @@ class _AgentRun:
                     else "グラフの実行回数上限に達しました。"
                 )
             )
-            result = {"status": "error", "error": reason, "stop_reason": "error"}
+            result = {
+                "status": "error",
+                "error": reason,
+                "error_type": (
+                    "model"
+                    if isinstance(error, (ModelError, EmbeddingError))
+                    else "database"
+                    if isinstance(error, SQLAlchemyError)
+                    else "execution"
+                ),
+                "stop_reason": "error",
+            }
         return {
             "question": question,
             **result,

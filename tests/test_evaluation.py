@@ -8,8 +8,9 @@ from sqlalchemy import select
 
 from jp_doc_agent import cli
 from jp_doc_agent.answering.generator import OpenAIAnswerGenerator
-from jp_doc_agent.evaluation.service import EvaluationCase, evaluate, load_cases, write_report
+from jp_doc_agent.evaluation.service import EvaluationCase, evaluate, load_cases
 from jp_doc_agent.models import Document
+from jp_doc_agent.reports import write_report
 from jp_doc_agent.retrieval.service import search
 
 
@@ -28,14 +29,13 @@ def case_for(engine, identifier, **overrides):
     )
 
 
-@pytest.mark.parametrize("mode", ["baseline", "agent"])
 def test_evaluation_checks_sources_and_keeps_expectations_out_of_prompt(
-    engine, ready_document, rag_encoder, tmp_path, mode
+    engine, ready_document, rag_encoder, tmp_path
 ):
     identifier = ready_document(["対象者は学生です。"])
     encoder, state = rag_encoder
     case = case_for(engine, identifier, answer_contains=["対象条件"])
-    report = evaluate(engine, encoder, OpenAIAnswerGenerator(encoder.client), [case], mode=mode)
+    report = evaluate(engine, encoder, OpenAIAnswerGenerator(encoder.client), [case])
     assert report["summary"]["passed"] == 1
     assert report["summary"]["retrieval_evidence_hit_rate"] == 1.0
     for _, body in state["calls"]:
@@ -122,6 +122,19 @@ def test_api_failure_is_recorded_and_next_case_runs(
         body = json.loads(request.content)
         if request.url.path.endswith("embeddings"):
             return httpx.Response(200, json=api_response(body["input"]))
+        if body["text"]["format"]["name"] == "research_step":
+            return httpx.Response(
+                200,
+                json=answer_response(
+                    {
+                        "action": "finish",
+                        "query": None,
+                        "document_id": None,
+                        "page_number": None,
+                        "reason": "追加の根拠資料が必要です。",
+                    }
+                ),
+            )
         answers.append(body)
         if len(answers) == 1:
             return httpx.Response(500, json={"error": {"message": "test-key secret-value"}})
@@ -194,9 +207,8 @@ def test_invalid_cases_are_rejected(tmp_path, payload):
         load_cases(path)
 
 
-@pytest.mark.parametrize("mode", ["baseline", "agent", "compare"])
 def test_cli_evaluation_writes_report(
-    engine, ready_document, rag_encoder, monkeypatch, tmp_path, capsys, mode
+    engine, ready_document, rag_encoder, monkeypatch, tmp_path, capsys
 ):
     identifier = ready_document(["対象者は学生です。"])
     encoder, _ = rag_encoder
@@ -211,8 +223,6 @@ def test_cli_evaluation_writes_report(
         [
             "jp-doc-agent",
             "evaluate-rag",
-            "--mode",
-            mode,
             "--cases",
             str(cases_path),
             "--output",
@@ -222,16 +232,10 @@ def test_cli_evaluation_writes_report(
     assert cli.main() == 0
     summary = json.loads(capsys.readouterr().out)
     report = json.loads(output.read_text())
-    if mode == "compare":
-        assert summary["baseline"]["passed"] == summary["agent"]["passed"] == 1
-        assert summary["resolved"] == summary["regressions"] == []
-        assert report["baseline"]["results"][0]["case"] == report["agent"]["results"][0]["case"]
-        report = report["agent"]
-    else:
-        assert summary["passed"] == 1
+    assert summary["passed"] == 1
+    assert report["workflow"] == "agent"
     assert report["results"][0]["result"]["citations"]
-    if mode != "baseline":
-        assert report["results"][0]["result"]["trace"]
+    assert report["results"][0]["result"]["trace"]
     assert encoder.client.is_closed()
 
 
@@ -250,7 +254,6 @@ def test_agent_evaluation_retains_error_trace_and_usage(engine, ready_document, 
         encoder,
         OpenAIAnswerGenerator(encoder.client),
         [case_for(engine, identifier)],
-        mode="agent",
     )
     assert report["summary"]["errors"] == 1
     assert report["summary"]["usage"]["answer_total_tokens"] == 70

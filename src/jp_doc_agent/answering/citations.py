@@ -1,15 +1,9 @@
-"""1 回の検索と回答生成を連携し、引用を原文と照合する。"""
+"""回答草案の引用を原文と照合し、全出典と引用番号を補完する。"""
 
 import re
-from time import perf_counter
 
-from sqlalchemy.engine import Engine
-
-from jp_doc_agent.answering.generator import PROMPT_VERSION, OpenAIAnswerGenerator
 from jp_doc_agent.answering.schema import AnswerDraft
-from jp_doc_agent.embedding.encoder import OpenAIEncoder
 from jp_doc_agent.llm import ModelError
-from jp_doc_agent.retrieval.service import search
 
 
 def _resolve_quote(hit: dict, quote: str) -> dict:
@@ -89,59 +83,4 @@ def resolve_answer(draft: AnswerDraft, hits: list[dict]) -> dict:
         "statements": statements,
         "citations": citations,
         "missing_information": draft.missing_information,
-    }
-
-
-def ask(
-    engine: Engine,
-    encoder: OpenAIEncoder,
-    generator: OpenAIAnswerGenerator,
-    query: str,
-    *,
-    top_k: int = 5,
-    document_id: int | None = None,
-) -> dict:
-    started = perf_counter()
-    retrieval = search(engine, encoder, query, top_k=top_k, document_id=document_id)
-    generated = generator.generate(query, retrieval["results"])
-    resolved = resolve_answer(generated.draft, retrieval["results"])
-    return {
-        "question": query,
-        **resolved,
-        "model": generated.model,
-        "requested_model": generator.model,
-        "prompt_version": PROMPT_VERSION,
-        "max_output_tokens": generator.max_output_tokens,
-        "elapsed_seconds": round(perf_counter() - started, 3),
-        "usage": {
-            "embedding_tokens": retrieval["api_tokens"],
-            "answer_input_tokens": generated.input_tokens,
-            "answer_output_tokens": generated.output_tokens,
-            "answer_total_tokens": generated.input_tokens + generated.output_tokens,
-        },
-        "retrieval": {
-            **{
-                key: retrieval[key]
-                for key in (
-                    "model",
-                    "profile_id",
-                    "top_k",
-                    "document_id",
-                    "coverage",
-                )
-            },
-            "results": [
-                {
-                    key: hit[key]
-                    for key in (
-                        "rank",
-                        "chunk_id",
-                        "document_id",
-                        "page_numbers",
-                        "cosine_similarity",
-                    )
-                }
-                for hit in retrieval["results"]
-            ],
-        },
     }

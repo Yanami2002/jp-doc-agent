@@ -273,9 +273,7 @@ def test_cli_failure_persists_trace_and_closes_client(
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setattr(cli, "create_database_engine", lambda _: engine)
     monkeypatch.setattr(cli.OpenAIEncoder, "from_settings", lambda _: encoder)
-    monkeypatch.setattr(
-        "sys.argv", ["jp-doc-agent", "agent-ask", "対象者は？", "--output", str(output)]
-    )
+    monkeypatch.setattr("sys.argv", ["jp-doc-agent", "ask", "対象者は？", "--output", str(output)])
     assert cli.main() == 1
     result = json.loads(output.read_text())
     assert result["status"] == "error" and result["trace"][-1]["status"] == "error"
@@ -295,3 +293,78 @@ def test_page_read_can_cite_real_cross_page_chunks_without_embeddings(engine, re
         assert source["chunk_end_char"] > source["chunk_start_char"]
     with pytest.raises(ValueError, match="物理ページ"):
         read_page_evidence(engine, identifier, 3)
+
+
+def test_rebuild_during_answer_uses_retrieved_snapshot(engine, ready_document, rag_encoder):
+    identifier = ready_document(["対象者は学生です。", "期限は三月です。"])
+    encoder, state = rag_encoder
+    state["during_answer"] = lambda: chunk_document(engine, identifier, ChunkingConfig(15, 3))
+    result = agent_ask(engine, encoder, OpenAIAnswerGenerator(encoder.client), "条件は？")
+    assert result["citations"][0]["page_numbers"] == [1, 2]
+    with engine.connect() as connection:
+        current_ids = connection.scalars(select(DocumentChunk.id)).all()
+    assert result["citations"][0]["chunk_id"] not in current_ids
+
+
+def test_cli_ask_uses_configured_model_and_closes_client(
+    engine, ready_document, rag_encoder, monkeypatch, tmp_path, capsys
+):
+    ready_document(["対象者は学生です。"])
+    encoder, state = rag_encoder
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_ANSWER_MODEL", "test-answer-model")
+    monkeypatch.setattr(cli, "create_database_engine", lambda _: engine)
+    monkeypatch.setattr(cli.OpenAIEncoder, "from_settings", lambda _: encoder)
+    monkeypatch.setattr(
+        "sys.argv", ["jp-doc-agent", "ask", "対象は？", "--output", str(tmp_path / "answer.json")]
+    )
+    assert cli.main() == 0
+    assert json.loads(capsys.readouterr().out)["status"] == "answered"
+    assert state["calls"][1][1]["model"] == "test-answer-model"
+    assert encoder.client.is_closed()
+
+
+def test_cli_invalid_config_never_calls_api(engine, rag_encoder, monkeypatch, capsys):
+    encoder, state = rag_encoder
+    monkeypatch.setenv("OPENAI_ANSWER_MAX_OUTPUT_TOKENS", "0")
+    monkeypatch.setattr(cli, "create_database_engine", lambda _: engine)
+    monkeypatch.setattr(cli.OpenAIEncoder, "from_settings", lambda _: encoder)
+    monkeypatch.setattr("sys.argv", ["jp-doc-agent", "ask", "対象は？"])
+    assert cli.main() == 1
+    assert "出力 Token" in capsys.readouterr().err
+    assert not state["calls"]
+
+
+def test_cli_bad_citation_never_displays_unverified_answer(
+    engine, ready_document, rag_encoder, monkeypatch, tmp_path, capsys
+):
+    ready_document(["対象者は学生です。"])
+    encoder, state = rag_encoder
+    state["draft"] = {
+        "status": "answered",
+        "missing_information": [],
+        "statements": [
+            {
+                "text": "表示してはいけない結論。",
+                "citations": [
+                    {
+                        "chunk_id": -1,
+                        "quote": "対象者は学生です。",
+                    }
+                ],
+            }
+        ],
+    }
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(cli, "create_database_engine", lambda _: engine)
+    monkeypatch.setattr(cli.OpenAIEncoder, "from_settings", lambda _: encoder)
+    monkeypatch.setattr(
+        "sys.argv", ["jp-doc-agent", "ask", "対象は？", "--output", str(tmp_path / "answer.json")]
+    )
+    assert cli.main() == 1
+    output = capsys.readouterr()
+    assert json.loads(output.out)["status"] == "error"
+    assert "引用先" in output.out
+    assert "表示してはいけない" not in output.out
+    assert output.err == ""
+    assert encoder.client.is_closed()

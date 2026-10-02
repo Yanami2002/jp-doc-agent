@@ -4,17 +4,12 @@ import json
 
 import httpx
 import pytest
-from sqlalchemy import select
 
-from jp_doc_agent import cli
+from jp_doc_agent.answering.citations import resolve_answer
 from jp_doc_agent.answering.generator import OpenAIAnswerGenerator
 from jp_doc_agent.answering.schema import AnswerDraft
-from jp_doc_agent.answering.service import ask, resolve_answer
-from jp_doc_agent.chunking.service import chunk_document
-from jp_doc_agent.chunking.splitter import ChunkingConfig
 from jp_doc_agent.config import ANSWER_MODEL
 from jp_doc_agent.llm import ModelError
-from jp_doc_agent.models import DocumentChunk
 
 
 @pytest.fixture
@@ -218,105 +213,3 @@ def test_api_errors_are_safe(hit, encoder_factory, status):
         OpenAIAnswerGenerator(encoder_factory(handler).client).generate("対象者は？", [hit])
     assert "secret-value" not in str(error.value)
     assert "test-key" not in str(error.value)
-
-
-def test_ask_runs_search_then_answer_and_preserves_usage(engine, ready_document, rag_encoder):
-    identifier = ready_document(["対象者は学生です。", "期限は三月です。"])
-    encoder, state = rag_encoder
-    result = ask(
-        engine, encoder, OpenAIAnswerGenerator(encoder.client), "条件は？", document_id=identifier
-    )
-    assert [path for path, _ in state["calls"]] == ["/v1/embeddings", "/v1/responses"]
-    assert result["status"] == "answered"
-    assert result["citations"][0]["page_numbers"] == [1, 2]
-    assert result["usage"] == {
-        "embedding_tokens": 1,
-        "answer_input_tokens": 50,
-        "answer_output_tokens": 20,
-        "answer_total_tokens": 70,
-    }
-    assert result["retrieval"]["coverage"]["pending"] == 0
-
-
-def test_insufficient_evidence_has_no_claims_or_citations(engine, ready_document, rag_encoder):
-    ready_document(["2024年度の説明です。"])
-    encoder, state = rag_encoder
-    state["draft"] = {
-        "status": "insufficient_evidence",
-        "statements": [],
-        "missing_information": ["2028年度の数値を含む資料。"],
-    }
-    result = ask(engine, encoder, OpenAIAnswerGenerator(encoder.client), "2028年度の売上は？")
-    assert result["status"] == "insufficient_evidence"
-    assert result["statements"] == result["citations"] == []
-    assert "取得した資料だけでは回答できません" in result["answer"]
-
-
-def test_rebuild_during_answer_uses_retrieved_snapshot(engine, ready_document, rag_encoder):
-    identifier = ready_document(["対象者は学生です。", "期限は三月です。"])
-    encoder, state = rag_encoder
-    state["during_answer"] = lambda: chunk_document(engine, identifier, ChunkingConfig(15, 3))
-    result = ask(engine, encoder, OpenAIAnswerGenerator(encoder.client), "条件は？")
-    assert result["citations"][0]["page_numbers"] == [1, 2]
-    with engine.connect() as connection:
-        current_ids = connection.scalars(select(DocumentChunk.id)).all()
-    assert result["citations"][0]["chunk_id"] not in current_ids
-
-
-def test_cli_ask_uses_configured_model_and_closes_client(
-    engine, ready_document, rag_encoder, monkeypatch, capsys
-):
-    ready_document(["対象者は学生です。"])
-    encoder, state = rag_encoder
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    monkeypatch.setenv("OPENAI_ANSWER_MODEL", "test-answer-model")
-    monkeypatch.setattr(cli, "create_database_engine", lambda _: engine)
-    monkeypatch.setattr(cli.OpenAIEncoder, "from_settings", lambda _: encoder)
-    monkeypatch.setattr("sys.argv", ["jp-doc-agent", "ask", "対象は？"])
-    assert cli.main() == 0
-    assert json.loads(capsys.readouterr().out)["status"] == "answered"
-    assert state["calls"][1][1]["model"] == "test-answer-model"
-    assert encoder.client.is_closed()
-
-
-def test_cli_invalid_config_never_calls_api(engine, rag_encoder, monkeypatch, capsys):
-    encoder, state = rag_encoder
-    monkeypatch.setenv("OPENAI_ANSWER_MAX_OUTPUT_TOKENS", "0")
-    monkeypatch.setattr(cli, "create_database_engine", lambda _: engine)
-    monkeypatch.setattr(cli.OpenAIEncoder, "from_settings", lambda _: encoder)
-    monkeypatch.setattr("sys.argv", ["jp-doc-agent", "ask", "対象は？"])
-    assert cli.main() == 1
-    assert "出力 Token" in capsys.readouterr().err
-    assert not state["calls"]
-
-
-def test_cli_bad_citation_never_displays_unverified_answer(
-    engine, ready_document, rag_encoder, monkeypatch, capsys
-):
-    ready_document(["対象者は学生です。"])
-    encoder, state = rag_encoder
-    state["draft"] = {
-        "status": "answered",
-        "missing_information": [],
-        "statements": [
-            {
-                "text": "表示してはいけない結論。",
-                "citations": [
-                    {
-                        "chunk_id": -1,
-                        "quote": "対象者は学生です。",
-                    }
-                ],
-            }
-        ],
-    }
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    monkeypatch.setattr(cli, "create_database_engine", lambda _: engine)
-    monkeypatch.setattr(cli.OpenAIEncoder, "from_settings", lambda _: encoder)
-    monkeypatch.setattr("sys.argv", ["jp-doc-agent", "ask", "対象は？"])
-    assert cli.main() == 1
-    output = capsys.readouterr()
-    assert output.out == ""
-    assert "引用先" in output.err
-    assert "表示してはいけない" not in output.err
-    assert encoder.client.is_closed()

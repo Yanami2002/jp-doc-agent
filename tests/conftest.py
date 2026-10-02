@@ -228,6 +228,19 @@ def rag_encoder(encoder_factory, api_response, answer_response):
         assert request.url.path == "/v1/responses"
         if state["during_answer"]:
             state["during_answer"]()
+        if body["text"]["format"]["name"] == "research_step":
+            return httpx.Response(
+                200,
+                json=answer_response(
+                    {
+                        "action": "finish",
+                        "query": None,
+                        "document_id": None,
+                        "page_number": None,
+                        "reason": "追加の根拠資料が必要です。",
+                    }
+                ),
+            )
         evidence = json.loads(body["input"][1]["content"])["evidence"][0]
         draft = state["draft"] or {
             "status": "answered",
