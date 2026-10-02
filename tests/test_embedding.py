@@ -6,7 +6,7 @@ import httpx
 import pytest
 
 from jp_doc_agent.config import EMBEDDING_MODEL
-from jp_doc_agent.embedding.encoder import EmbeddingError
+from jp_doc_agent.embedding.encoder import MAX_QUERY_TOKENS, EmbeddingError
 
 
 def test_api_keeps_raw_text_and_reorders_vectors_by_input_index(api_response, encoder_factory):
@@ -100,3 +100,22 @@ def test_invalid_input_never_calls_api(encoder_factory, texts):
 
     with pytest.raises(ValueError):
         encoder_factory(handler).encode(texts)
+
+
+def test_query_can_exceed_chunk_limit_and_keeps_original_text(api_response, encoder_factory):
+    query = "あ" * 301
+
+    def handler(request):
+        assert json.loads(request.content)["input"] == [query]
+        return httpx.Response(200, json=api_response([query]))
+
+    assert encoder_factory(handler).encode_query(query).vectors[0][0] == 1.0
+
+
+@pytest.mark.parametrize("query", ["", " \n", "あ" * (MAX_QUERY_TOKENS + 1)])
+def test_invalid_query_never_calls_api(encoder_factory, query):
+    def handler(request):
+        pytest.fail("不正な質問で API を呼び出してはいけません。")
+
+    with pytest.raises(ValueError, match="質問"):
+        encoder_factory(handler).encode_query(query)

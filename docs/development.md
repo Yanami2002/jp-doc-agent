@@ -49,6 +49,9 @@ uv run jp-doc-agent documents
 uv run jp-doc-agent embed-chunks
 uv run jp-doc-agent embedding-status
 
+# 関連する本文と出典を検索
+uv run jp-doc-agent search "2024年度第2四半期の売上収益はいくらですか？" --top-k 5
+
 # テスト・静的検査・スキーマの差分確認
 uv run pytest -q
 uv run ruff check .
@@ -87,12 +90,14 @@ jp-doc-agent/
 │   ├── test_chunk_migrations.py # 旧スキーマからの移行と復元
 │   ├── test_embedding.py     # API 応答と SDK のリトライ
 │   ├── test_embedding_service.py # ベクトル保存・再開・競合
-│   └── test_embedding_migrations.py # ベクトルのスキーマ移行
+│   ├── test_embedding_migrations.py # ベクトルのスキーマ移行
+│   └── test_retrieval.py     # 検索順位、範囲、出典、並行更新
 ├── docs/
 │   ├── development.md        # 本ガイド
 │   ├── document-import.md    # PDF 取り込み
 │   ├── chunking.md           # 分割方法、保存形式、検証結果
-│   └── embedding.md          # API 接続、ベクトル保存、再開
+│   ├── embedding.md          # API 接続、ベクトル保存、再開
+│   └── retrieval.md          # 検索方法、出典、未処理範囲
 └── src/jp_doc_agent/
     ├── config.py             # .env から設定を読み込む
     ├── database.py           # DB 接続と pgvector の確認
@@ -105,6 +110,8 @@ jp-doc-agent/
     ├── embedding/
     │   ├── encoder.py        # API 接続、入力と応答の検証
     │   └── service.py        # バッチ保存、重複スキップ、保存件数の確認
+    ├── retrieval/
+    │   └── service.py        # 余弦距離検索、文書範囲、出典検証
     └── ingestion/
         ├── download.py       # ダウンロード、形式・サイズ・ハッシュの確認
         ├── pdf.py            # ページ単位の日本語本文抽出
@@ -113,7 +120,7 @@ jp-doc-agent/
 
 `.env`、`.venv/`、`data/`、キャッシュは Git の管理対象外です。FastAPI と LangGraph は対応機能の実装時に追加します。
 
-機能ごとの処理は `ingestion/`、`chunking/`、`embedding/` に置き、設定・接続・モデル・CLI は共通部分としてパッケージ直下に置きます。`chunking/splitter.py` は DB 接続や PDF の取得に依存せず、`chunking/service.py` がトランザクションと永続化を担当します。`migrations/versions/` は適用済み環境を更新するための履歴なので、古いファイルも保持します。
+機能ごとの処理は `ingestion/`、`chunking/`、`embedding/`、`retrieval/` に置き、設定・接続・モデル・CLI は共通部分としてパッケージ直下に置きます。`chunking/splitter.py` は DB 接続や PDF の取得に依存せず、`chunking/service.py` がトランザクションと永続化を担当します。`retrieval/service.py` が Embedding API を再利用し、検索 SQL と出典検証を担当します。`migrations/versions/` は適用済み環境を更新するための履歴なので、古いファイルも保持します。
 
 ## データベースの注意点
 

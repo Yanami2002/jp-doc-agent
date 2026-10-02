@@ -1,6 +1,6 @@
 # 日本語本文のチャンク分割
 
-登録済みのページ本文を文書ごとに結合し、検索に使える小さなテキストの単位に分割して保存します。ページ境界を越えたチャンクにも、各ページの原文位置を付けます。分割と原文位置の検証は `src/jp_doc_agent/chunking/splitter.py`、DB への保存・参照・再生成は `src/jp_doc_agent/chunking/service.py` が担当します。保存先は `document_chunks` と `chunk_sources` です。Embedding は [ベクトル化](embedding.md) で実装済みです。検索は後続の開発で追加します。
+登録済みのページ本文を文書ごとに結合し、検索に使える小さなテキストの単位に分割して保存します。ページ境界を越えたチャンクにも、各ページの原文位置を付けます。分割と原文位置の検証は `src/jp_doc_agent/chunking/splitter.py`、DB への保存・参照・再生成は `src/jp_doc_agent/chunking/service.py` が担当します。保存先は `document_chunks` と `chunk_sources` です。Embedding は [ベクトル化](embedding.md) で実装済みです。出典付き検索は [ベクトル検索](retrieval.md) で実装済みです。
 
 ## 実行方法
 
@@ -43,7 +43,7 @@ uv run jp-doc-agent chunks 1 --limit 20 --offset 20
 | --- | --- | --- |
 | `chunk_size` | 300 | 前文の重複を含めた 1 チャンクの最大 Token 数 |
 | `chunk_overlap` | 30 | 前文から補う重複部分の最大 Token 数 |
-| 長さの計測 | tiktoken / `cl100k_base` | 採用予定の API モデル `text-embedding-3-small` に対応 |
+| 長さの計測 | tiktoken / `cl100k_base` | 採用した API モデル `text-embedding-3-small` に対応 |
 | `keep_separator` | `end` | 区切り文字を直前のテキストに残す |
 | `strip_whitespace` | `False` | 原文との対応のため、空白を自動削除しない |
 | 分割範囲 | 同じ文書の全文 | ページ境界を強制的な分割位置にしない |
@@ -59,7 +59,7 @@ LangChain の `add_start_index` は重複量を文字数として扱うため利
 
 ベクトル化は OpenAI の `text-embedding-3-small` API を使用します。[Dify の公式 OpenAI プラグイン](https://github.com/langgenius/dify-official-plugins/blob/main/models/openai/models/text_embedding/text-embedding-3-small.yaml) に同モデルの定義があり、[Haystack](https://docs.haystack.deepset.ai/docs/openaidocumentembedder) も OpenAI Embedding モデルを接続できます。両プロジェクトとも複数モデルに対応しており、全てのオープンソース RAG が同じモデルを使うという意味ではありません。
 
-[OpenAI の公式ガイド](https://developers.openai.com/api/docs/guides/embeddings) に従い、対応する `cl100k_base` で本文の長さを計測します。tiktoken は Token 計数だけを行い、ローカルで Embedding モデルを推論しません。初回はエンコーディングデータのダウンロードにネットワーク接続が必要ですが、分割に API キーは不要です。API 呼び出しとベクトル保存は実装済みで、`OPENAI_API_KEY` を用いて接続します。実行方法と再開の仕組みは [ベクトル化](embedding.md) を参照してください。検索は未実装です。
+[OpenAI の公式ガイド](https://developers.openai.com/api/docs/guides/embeddings) に従い、対応する `cl100k_base` で本文の長さを計測します。tiktoken は Token 計数だけを行い、ローカルで Embedding モデルを推論しません。初回はエンコーディングデータのダウンロードにネットワーク接続が必要ですが、分割に API キーは不要です。API 呼び出しとベクトル保存は実装済みで、`OPENAI_API_KEY` を用いて接続します。実行方法と再開の仕組みは [ベクトル化](embedding.md) を参照してください。検索方法は [ベクトル検索](retrieval.md) を参照してください。
 
 ## 原文への追跡
 

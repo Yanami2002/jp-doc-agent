@@ -17,6 +17,15 @@ from jp_doc_agent.config import (
     OpenAISettings,
 )
 
+MAX_QUERY_TOKENS = 8191
+
+
+def validate_query(query: str) -> int:
+    token_count = count_tokens(query)
+    if not query.strip() or not 1 <= token_count <= MAX_QUERY_TOKENS:
+        raise ValueError(f"質問は空白以外の文字を含む 1〜{MAX_QUERY_TOKENS} Token が必要です。")
+    return token_count
+
 
 class EmbeddingError(RuntimeError):
     """API の本文や秘密情報を含めない、利用者向けのエラー。"""
@@ -67,6 +76,14 @@ class OpenAIEncoder:
             raise ValueError("Embedding の 1 回の入力は 1〜32 件にしてください。")
         if any(not text.strip() or not 1 <= count_tokens(text) <= 300 for text in texts):
             raise ValueError("Embedding の本文は空白以外の文字を含む 1〜300 Token が必要です。")
+        return self._request(texts)
+
+    def encode_query(self, query: str) -> EmbeddingBatch:
+        """質問の長さはチャンクの 300 Token 上限とは別に検証する。"""
+        validate_query(query)
+        return self._request([query])
+
+    def _request(self, texts: list[str]) -> EmbeddingBatch:
         try:
             response = self.client.embeddings.create(
                 model=EMBEDDING_MODEL,

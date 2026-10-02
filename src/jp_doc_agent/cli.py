@@ -3,6 +3,8 @@
 import argparse
 import json
 import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -20,6 +22,20 @@ from jp_doc_agent.embedding.encoder import OpenAIEncoder
 from jp_doc_agent.embedding.service import embed_documents, embedding_status
 from jp_doc_agent.ingestion.download import copy_local_pdf
 from jp_doc_agent.ingestion.service import import_manifest, import_pdf, list_documents, read_page
+from jp_doc_agent.retrieval.service import search
+
+
+@contextmanager
+def _openai_encoder() -> Iterator[OpenAIEncoder]:
+    try:
+        settings = OpenAISettings()
+    except ValidationError:
+        raise ValueError("プロジェクトの .env に OPENAI_API_KEY を設定してください。") from None
+    encoder = OpenAIEncoder.from_settings(settings)
+    try:
+        yield encoder
+    finally:
+        encoder.client.close()
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -78,6 +94,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     status = commands.add_parser("embedding-status", help="ベクトル化済み件数と未処理件数を確認")
     status.add_argument("--document-id", type=int, help="対象文書 ID（省略時は全件）")
+    retrieval = commands.add_parser("search", help="質問に関連するチャンクを出典付きで検索")
+    retrieval.add_argument("query", help="日本語の質問")
+    retrieval.add_argument("--top-k", type=int, default=5, help="取得件数（1〜100、既定値: 5）")
+    retrieval.add_argument("--document-id", type=int, help="対象文書 ID（省略時は全件）")
     return parser
 
 
@@ -107,19 +127,10 @@ def main() -> int:
         if args.command == "embed-chunks":
             if not 1 <= args.batch_size <= 32:
                 raise ValueError("batch-size は 1〜32 にしてください。")
-            try:
-                api_settings = OpenAISettings()
-            except ValidationError:
-                raise ValueError(
-                    "プロジェクトの .env に OPENAI_API_KEY を設定してください。"
-                ) from None
-            encoder = OpenAIEncoder.from_settings(api_settings)
-            try:
+            with _openai_encoder() as encoder:
                 results = embed_documents(
                     engine, encoder, document_id=args.document_id, batch_size=args.batch_size
                 )
-            finally:
-                encoder.client.close()
             result = {
                 "model": EMBEDDING_MODEL,
                 "embedded": sum(item["embedded"] for item in results),
@@ -130,6 +141,11 @@ def main() -> int:
             }
             print(json.dumps(result, ensure_ascii=False, indent=2))
             return 1 if result["failed_documents"] else 0
+        elif args.command == "search":
+            with _openai_encoder() as encoder:
+                result = search(
+                    engine, encoder, args.query, top_k=args.top_k, document_id=args.document_id
+                )
         elif args.command == "embedding-status":
             result = embedding_status(engine, document_id=args.document_id)
         elif args.command == "check-db":
