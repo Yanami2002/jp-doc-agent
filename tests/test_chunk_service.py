@@ -1,12 +1,10 @@
 """チャンクの保存・参照・再生成と CLI を実際の PostgreSQL で検証する。"""
 
-import hashlib
 import json
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy import delete, event, func, insert, select, update
+from sqlalchemy import delete, event, func, select, update
 
 from jp_doc_agent import cli
 from jp_doc_agent.chunking.service import chunk_document, chunk_documents, list_chunks
@@ -14,37 +12,6 @@ from jp_doc_agent.chunking.splitter import ChunkingConfig, count_tokens
 from jp_doc_agent.ingestion.download import save_pdf
 from jp_doc_agent.ingestion.service import import_pdf
 from jp_doc_agent.models import ChunkSource, Document, DocumentChunk, DocumentPage
-
-
-@pytest.fixture
-def text_document(engine):
-    def build(pages):
-        with engine.begin() as connection:
-            identifier = connection.execute(
-                insert(Document)
-                .values(
-                    sha256=hashlib.sha256(json.dumps(pages).encode()).hexdigest(),
-                    title="日本語資料",
-                    source_url="https://example.com/document.pdf",
-                    resolved_url="https://example.com/document.pdf",
-                    dataset="test",
-                    file_path="/test/document.pdf",
-                    page_count=len(pages),
-                    acquired_at=datetime.now(UTC),
-                    parser_version="test-parser",
-                )
-                .returning(Document.id)
-            ).scalar_one()
-            connection.execute(
-                insert(DocumentPage),
-                [
-                    {"document_id": identifier, "page_number": index, "text": text}
-                    for index, text in enumerate(pages, start=1)
-                ],
-            )
-        return identifier
-
-    return build
 
 
 def test_cross_page_chunk_is_findable_by_either_source_page(engine, text_document):

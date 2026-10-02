@@ -14,8 +14,10 @@ from sqlalchemy.exc import SQLAlchemyError
 from jp_doc_agent.benchmark import fetch_benchmark
 from jp_doc_agent.chunking.service import chunk_documents, list_chunks
 from jp_doc_agent.chunking.splitter import ChunkingConfig
-from jp_doc_agent.config import Settings
+from jp_doc_agent.config import EMBEDDING_MODEL, OpenAISettings, Settings
 from jp_doc_agent.database import check_database, create_database_engine
+from jp_doc_agent.embedding.encoder import OpenAIEncoder
+from jp_doc_agent.embedding.service import embed_documents, embedding_status
 from jp_doc_agent.ingestion.download import copy_local_pdf
 from jp_doc_agent.ingestion.service import import_manifest, import_pdf, list_documents, read_page
 
@@ -66,6 +68,16 @@ def build_parser() -> argparse.ArgumentParser:
     chunks.add_argument("--page", type=int, dest="page_number", help="物理ページ番号で絞り込み")
     chunks.add_argument("--limit", type=int, default=20, help="取得件数（1〜100、既定値: 20）")
     chunks.add_argument("--offset", type=int, default=0, help="先頭からスキップする件数")
+
+    embedding = commands.add_parser(
+        "embed-chunks", help="OpenAI API でチャンクをベクトル化して保存"
+    )
+    embedding.add_argument("--document-id", type=int, help="対象文書 ID（省略時は全件）")
+    embedding.add_argument(
+        "--batch-size", type=int, default=32, help="API の 1 回の入力件数（1〜32）"
+    )
+    status = commands.add_parser("embedding-status", help="ベクトル化済み件数と未処理件数を確認")
+    status.add_argument("--document-id", type=int, help="対象文書 ID（省略時は全件）")
     return parser
 
 
@@ -92,7 +104,35 @@ def main() -> int:
 
     engine = create_database_engine(settings)
     try:
-        if args.command == "check-db":
+        if args.command == "embed-chunks":
+            if not 1 <= args.batch_size <= 32:
+                raise ValueError("batch-size は 1〜32 にしてください。")
+            try:
+                api_settings = OpenAISettings()
+            except ValidationError:
+                raise ValueError(
+                    "プロジェクトの .env に OPENAI_API_KEY を設定してください。"
+                ) from None
+            encoder = OpenAIEncoder.from_settings(api_settings)
+            try:
+                results = embed_documents(
+                    engine, encoder, document_id=args.document_id, batch_size=args.batch_size
+                )
+            finally:
+                encoder.client.close()
+            result = {
+                "model": EMBEDDING_MODEL,
+                "embedded": sum(item["embedded"] for item in results),
+                "skipped": sum(item["skipped"] for item in results),
+                "failed_documents": sum(item["status"] == "failed" for item in results),
+                "api_tokens": sum(item["api_tokens"] for item in results),
+                "results": results,
+            }
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 1 if result["failed_documents"] else 0
+        elif args.command == "embedding-status":
+            result = embedding_status(engine, document_id=args.document_id)
+        elif args.command == "check-db":
             result = {"status": "ok", **check_database(engine)}
         elif args.command == "import-documents":
             results = import_manifest(engine, args.manifest, args.data_dir)

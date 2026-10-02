@@ -2,6 +2,7 @@
 
 from datetime import datetime
 
+from pgvector.sqlalchemy import VECTOR
 from sqlalchemy import (
     JSON,
     CheckConstraint,
@@ -14,6 +15,8 @@ from sqlalchemy import (
     func,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+from jp_doc_agent.config import EMBEDDING_DIMENSIONS
 
 
 class Base(DeclarativeBase):
@@ -101,3 +104,32 @@ class ChunkSource(Base):
     end_char: Mapped[int]
     chunk_start_char: Mapped[int]
     chunk_end_char: Mapped[int]
+
+
+class EmbeddingProfile(Base):
+    __tablename__ = "embedding_profiles"
+    __table_args__ = (CheckConstraint("dimensions = 1536", name="embedding_profile_dimensions"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    provider: Mapped[str] = mapped_column(String(50))
+    model: Mapped[str] = mapped_column(String(100))
+    dimensions: Mapped[int]
+    config: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ChunkEmbedding(Base):
+    __tablename__ = "chunk_embeddings"
+    __table_args__ = (
+        CheckConstraint("token_count > 0 AND token_count <= 300", name="embedding_token_count"),
+        CheckConstraint("vector_norm(embedding) > 0", name="nonzero_embedding"),
+    )
+
+    chunk_id: Mapped[int] = mapped_column(
+        ForeignKey("document_chunks.id", ondelete="CASCADE"), primary_key=True
+    )
+    profile_id: Mapped[str] = mapped_column(ForeignKey("embedding_profiles.id"), primary_key=True)
+    input_hash: Mapped[str] = mapped_column(String(64))
+    token_count: Mapped[int]
+    embedding: Mapped[list[float]] = mapped_column(VECTOR(EMBEDDING_DIMENSIONS))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

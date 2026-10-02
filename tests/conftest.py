@@ -1,17 +1,24 @@
 """Run integration tests in temporary PostgreSQL schemas, never in application tables."""
 
+import hashlib
+import json
+from datetime import UTC, datetime
 from io import BytesIO
 from uuid import uuid4
 
+import httpx
 import pytest
 from alembic import command
 from alembic.config import Config
+from openai import OpenAI
 from pypdf import PdfWriter
 from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, insert, text
 
-from jp_doc_agent.config import Settings
+from jp_doc_agent.config import EMBEDDING_DIMENSIONS, EMBEDDING_MODEL, Settings
 from jp_doc_agent.database import create_database_engine
+from jp_doc_agent.embedding.encoder import OpenAIEncoder
+from jp_doc_agent.models import Document, DocumentPage
 
 
 @pytest.fixture
@@ -65,3 +72,70 @@ def pdf_bytes():
         return buffer.getvalue()
 
     return build
+
+
+@pytest.fixture
+def text_document(engine):
+    def build(pages):
+        with engine.begin() as connection:
+            identifier = connection.execute(
+                insert(Document)
+                .values(
+                    sha256=hashlib.sha256(json.dumps(pages).encode()).hexdigest(),
+                    title="日本語資料",
+                    source_url="https://example.com/document.pdf",
+                    resolved_url="https://example.com/document.pdf",
+                    dataset="test",
+                    file_path="/test/document.pdf",
+                    page_count=len(pages),
+                    acquired_at=datetime.now(UTC),
+                    parser_version="test-parser",
+                )
+                .returning(Document.id)
+            ).scalar_one()
+            connection.execute(
+                insert(DocumentPage),
+                [
+                    {"document_id": identifier, "page_number": index, "text": text}
+                    for index, text in enumerate(pages, start=1)
+                ],
+            )
+        return identifier
+
+    return build
+
+
+@pytest.fixture
+def api_response():
+    def embedding_response(texts: list[str]) -> dict:
+        data = []
+        for index, _ in enumerate(texts):
+            vector = [0.0] * EMBEDDING_DIMENSIONS
+            vector[index] = 1.0
+            data.append({"object": "embedding", "index": index, "embedding": vector})
+        return {
+            "object": "list",
+            "model": EMBEDDING_MODEL,
+            "data": data,
+            "usage": {"prompt_tokens": len(texts), "total_tokens": len(texts)},
+        }
+
+    return embedding_response
+
+
+@pytest.fixture
+def encoder_factory():
+    clients = []
+
+    def build(handler, *, retries=0):
+        client = OpenAI(
+            api_key="test-key",
+            max_retries=retries,
+            http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+        clients.append(client)
+        return OpenAIEncoder(client)
+
+    yield build
+    for client in clients:
+        client.close()

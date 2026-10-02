@@ -4,6 +4,20 @@ from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy import URL
 
+EMBEDDING_MODEL = "text-embedding-3-small"
+EMBEDDING_DIMENSIONS = 1536
+TOKEN_ENCODING = "cl100k_base"
+
+
+class OpenAISettings(BaseSettings):
+    """Embedding の実行時だけ API キーを読み込む。"""
+
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8", env_prefix="OPENAI_", extra="ignore"
+    )
+
+    api_key: SecretStr = Field(min_length=1)
+
 
 class Settings(BaseSettings):
     """Environment variables override values in the current directory's .env."""

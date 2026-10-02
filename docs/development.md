@@ -45,6 +45,10 @@ uv run jp-doc-agent fetch-benchmark
 uv run jp-doc-agent chunk-documents
 uv run jp-doc-agent documents
 
+# API キー設定後にベクトル化し、保存件数を確認
+uv run jp-doc-agent embed-chunks
+uv run jp-doc-agent embedding-status
+
 # テスト・静的検査・スキーマの差分確認
 uv run pytest -q
 uv run ruff check .
@@ -72,7 +76,7 @@ jp-doc-agent/
 ├── .env.example              # 設定のテンプレート
 ├── compose.yaml              # PostgreSQL と永続化設定
 ├── alembic.ini
-├── migrations/               # 文書・ページ・チャンクのスキーマ変更
+├── migrations/               # 文書・ページ・チャンク・ベクトルのスキーマ変更
 ├── sources/                  # 公開 PDF の取得元とハッシュ
 ├── docker/init.sql           # pgvector の有効化
 ├── tests/
@@ -80,11 +84,15 @@ jp-doc-agent/
 │   ├── test_ingestion.py    # PDF 取り込みの検証
 │   ├── test_chunking.py     # DB を使わない分割・原文位置の検証
 │   ├── test_chunk_service.py # 保存・参照・再生成・CLI の検証
-│   └── test_chunk_migrations.py # 旧スキーマからの移行と復元
+│   ├── test_chunk_migrations.py # 旧スキーマからの移行と復元
+│   ├── test_embedding.py     # API 応答と SDK のリトライ
+│   ├── test_embedding_service.py # ベクトル保存・再開・競合
+│   └── test_embedding_migrations.py # ベクトルのスキーマ移行
 ├── docs/
 │   ├── development.md        # 本ガイド
 │   ├── document-import.md    # PDF 取り込み
-│   └── chunking.md           # 分割方法、保存形式、検証結果
+│   ├── chunking.md           # 分割方法、保存形式、検証結果
+│   └── embedding.md          # API 接続、ベクトル保存、再開
 └── src/jp_doc_agent/
     ├── config.py             # .env から設定を読み込む
     ├── database.py           # DB 接続と pgvector の確認
@@ -94,6 +102,9 @@ jp-doc-agent/
     ├── chunking/
     │   ├── splitter.py       # Token 計数、本文分割、ページへの対応付け
     │   └── service.py        # チャンクの保存、再生成、出典付き参照
+    ├── embedding/
+    │   ├── encoder.py        # API 接続、入力と応答の検証
+    │   └── service.py        # バッチ保存、重複スキップ、保存件数の確認
     └── ingestion/
         ├── download.py       # ダウンロード、形式・サイズ・ハッシュの確認
         ├── pdf.py            # ページ単位の日本語本文抽出
@@ -102,7 +113,7 @@ jp-doc-agent/
 
 `.env`、`.venv/`、`data/`、キャッシュは Git の管理対象外です。FastAPI と LangGraph は対応機能の実装時に追加します。
 
-機能ごとの処理は `ingestion/` と `chunking/` に置き、設定・接続・モデル・CLI は共通部分としてパッケージ直下に置きます。`chunking/splitter.py` は DB 接続や PDF の取得に依存せず、`chunking/service.py` がトランザクションと永続化を担当します。`migrations/versions/` は適用済み環境を更新するための履歴なので、古いファイルも保持します。
+機能ごとの処理は `ingestion/`、`chunking/`、`embedding/` に置き、設定・接続・モデル・CLI は共通部分としてパッケージ直下に置きます。`chunking/splitter.py` は DB 接続や PDF の取得に依存せず、`chunking/service.py` がトランザクションと永続化を担当します。`migrations/versions/` は適用済み環境を更新するための履歴なので、古いファイルも保持します。
 
 ## データベースの注意点
 

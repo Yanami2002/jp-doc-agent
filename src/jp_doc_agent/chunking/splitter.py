@@ -7,10 +7,10 @@ from importlib.metadata import version
 import tiktoken
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
+from jp_doc_agent.config import EMBEDDING_MODEL, TOKEN_ENCODING
+
 SEPARATORS = ("\n\n", "。", "！", "？", "\n", "、", " ", "")
 PAGE_DELIMITER = "\n"
-EMBEDDING_MODEL = "text-embedding-3-small"
-TOKEN_ENCODING = "cl100k_base"
 
 
 @lru_cache(maxsize=1)

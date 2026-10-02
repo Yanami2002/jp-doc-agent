@@ -1,6 +1,6 @@
 # 日本語本文のチャンク分割
 
-登録済みのページ本文を文書ごとに結合し、検索に使える小さなテキストの単位に分割して保存します。ページ境界を越えたチャンクにも、各ページの原文位置を付けます。分割と原文位置の検証は `src/jp_doc_agent/chunking/splitter.py`、DB への保存・参照・再生成は `src/jp_doc_agent/chunking/service.py` が担当します。保存先は `document_chunks` と `chunk_sources` です。Embedding と検索は後続の開発で追加します。
+登録済みのページ本文を文書ごとに結合し、検索に使える小さなテキストの単位に分割して保存します。ページ境界を越えたチャンクにも、各ページの原文位置を付けます。分割と原文位置の検証は `src/jp_doc_agent/chunking/splitter.py`、DB への保存・参照・再生成は `src/jp_doc_agent/chunking/service.py` が担当します。保存先は `document_chunks` と `chunk_sources` です。Embedding は [ベクトル化](embedding.md) で実装済みです。検索は後続の開発で追加します。
 
 ## 実行方法
 
@@ -57,9 +57,9 @@ LangChain の `add_start_index` は重複量を文字数として扱うため利
 
 ## Embedding API の採用方針
 
-後続のベクトル化は OpenAI の `text-embedding-3-small` API を使用する方針です。[Dify の公式 OpenAI プラグイン](https://github.com/langgenius/dify-official-plugins/blob/main/models/openai/models/text_embedding/text-embedding-3-small.yaml) に同モデルの定義があり、[Haystack](https://docs.haystack.deepset.ai/docs/openaidocumentembedder) も OpenAI Embedding モデルを接続できます。両プロジェクトとも複数モデルに対応しており、全てのオープンソース RAG が同じモデルを使うという意味ではありません。
+ベクトル化は OpenAI の `text-embedding-3-small` API を使用します。[Dify の公式 OpenAI プラグイン](https://github.com/langgenius/dify-official-plugins/blob/main/models/openai/models/text_embedding/text-embedding-3-small.yaml) に同モデルの定義があり、[Haystack](https://docs.haystack.deepset.ai/docs/openaidocumentembedder) も OpenAI Embedding モデルを接続できます。両プロジェクトとも複数モデルに対応しており、全てのオープンソース RAG が同じモデルを使うという意味ではありません。
 
-[OpenAI の公式ガイド](https://developers.openai.com/api/docs/guides/embeddings) に従い、対応する `cl100k_base` で本文の長さを計測します。tiktoken は Token 計数だけを行い、ローカルで Embedding モデルを推論しません。初回はエンコーディングデータのダウンロードにネットワーク接続が必要ですが、分割に API キーは不要です。API 呼び出し・ベクトル保存・検索はまだ未実装で、後続で `OPENAI_API_KEY` を用いて接続します。
+[OpenAI の公式ガイド](https://developers.openai.com/api/docs/guides/embeddings) に従い、対応する `cl100k_base` で本文の長さを計測します。tiktoken は Token 計数だけを行い、ローカルで Embedding モデルを推論しません。初回はエンコーディングデータのダウンロードにネットワーク接続が必要ですが、分割に API キーは不要です。API 呼び出しとベクトル保存は実装済みで、`OPENAI_API_KEY` を用いて接続します。実行方法と再開の仕組みは [ベクトル化](embedding.md) を参照してください。検索は未実装です。
 
 ## 原文への追跡
 
